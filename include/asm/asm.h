@@ -1,0 +1,4 @@
+#ifndef VCOREIII_STANDALONE_ASM_H
+#define VCOREIII_STANDALONE_ASM_H
+#define PTR_LI li
+#endif

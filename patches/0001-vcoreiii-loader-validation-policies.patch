@@ -1,0 +1,353 @@
+--- a/linux-3.18/arch/mips/vcoreiii/loader/head.S
++++ b/linux-3.18/arch/mips/vcoreiii/loader/head.S
+@@ -30,11 +30,57 @@
+ #define INITIAL_CONFIG 0x3		/* KSEG0 cached */
+ 
+ #define LOADER_MAGIC 0x4d495053
+-#define LOADER_SIZE  0x00040000		/* Size of memory allocated to loader */
++#define LOADER_SIZE  0x00040000		/* Fixed flash space occupied by loader */
+ #define LOADER_MASK ~(LOADER_SIZE-1)
+-#define PAYLOAD_SIZE 0x003c0000		/* Size of memory allocated to payload */
+-#define REGION_SIZE (LOADER_SIZE + PAYLOAD_SIZE)
++#define PAYLOAD_HEADER_SIZE 32
++
++/*
++ * Validation geometry is deliberately separated from policy. REGION_SIZE is
++ * the distance to the next fallback boot region. HARD_PAYLOAD_LIMIT is always
++ * enforced and must fit between the payload header at LOADER_SIZE and the
++ * configured payload-slot end. The next fallback region may be farther away.
++ * LEGACY_PAYLOAD_LIMIT may be rejected, warned about, or ignored.
++ */
++#ifndef CONFIG_FALLBACK_REGION_SIZE
++#define CONFIG_FALLBACK_REGION_SIZE 0x00400000
++#endif
++#ifndef CONFIG_PAYLOAD_SLOT_END
++#define CONFIG_PAYLOAD_SLOT_END CONFIG_FALLBACK_REGION_SIZE
++#endif
++#ifndef CONFIG_LEGACY_PAYLOAD_LIMIT
++#define CONFIG_LEGACY_PAYLOAD_LIMIT (CONFIG_PAYLOAD_SLOT_END - LOADER_SIZE - PAYLOAD_HEADER_SIZE)
++#endif
++#ifndef CONFIG_HARD_PAYLOAD_LIMIT
++#define CONFIG_HARD_PAYLOAD_LIMIT (CONFIG_PAYLOAD_SLOT_END - LOADER_SIZE - PAYLOAD_HEADER_SIZE)
++#endif
++
++#define REGION_SIZE CONFIG_FALLBACK_REGION_SIZE
+ #define REGION_MASK ~(REGION_SIZE-1)
++#define PAYLOAD_SLOT_END CONFIG_PAYLOAD_SLOT_END
++#define LEGACY_PAYLOAD_LIMIT CONFIG_LEGACY_PAYLOAD_LIMIT
++#define HARD_PAYLOAD_LIMIT CONFIG_HARD_PAYLOAD_LIMIT
++
++#if (defined(CONFIG_CRC_POLICY_STRICT) + defined(CONFIG_CRC_POLICY_WARN) + defined(CONFIG_CRC_POLICY_OFF)) != 1
++#error Exactly one CONFIG_CRC_POLICY_* setting must be selected
++#endif
++#if (defined(CONFIG_SIZE_POLICY_LEGACY_STRICT) + defined(CONFIG_SIZE_POLICY_LEGACY_WARN) + defined(CONFIG_SIZE_POLICY_HARD_ONLY)) != 1
++#error Exactly one CONFIG_SIZE_POLICY_* setting must be selected
++#endif
++#if (REGION_SIZE & (REGION_SIZE - 1)) != 0
++#error CONFIG_FALLBACK_REGION_SIZE must be a power of two
++#endif
++#if PAYLOAD_SLOT_END > REGION_SIZE
++#error CONFIG_PAYLOAD_SLOT_END may not cross the next fallback region
++#endif
++#if PAYLOAD_SLOT_END <= (LOADER_SIZE + PAYLOAD_HEADER_SIZE)
++#error CONFIG_PAYLOAD_SLOT_END leaves no room for a payload
++#endif
++#if HARD_PAYLOAD_LIMIT > (PAYLOAD_SLOT_END - LOADER_SIZE - PAYLOAD_HEADER_SIZE)
++#error CONFIG_HARD_PAYLOAD_LIMIT plus its header crosses the payload slot boundary
++#endif
++#if LEGACY_PAYLOAD_LIMIT > HARD_PAYLOAD_LIMIT
++#error CONFIG_LEGACY_PAYLOAD_LIMIT must not exceed CONFIG_HARD_PAYLOAD_LIMIT
++#endif
+ 
+ #define REASON_STARTUP 		0		/* Power up */
+ #define REASON_TLB		1		/* TLB exception */
+@@ -104,6 +150,7 @@
+ 	sw	zero, 0(v0)	/* Get ready to take us out of boot mode */
+ 	lw	zero, 0(v0)	/* Now take us out of boot mode */
+ 
++#if !defined(CONFIG_CRC_POLICY_OFF)
+ /*
+  * crc32 calculator macro. Input is in any register.
+  *   a2 -> crc table
+@@ -149,6 +196,18 @@
+ 	srl	s0, s0, 8	/* Update accumulator while load runs */
+ 	xor	s0, s0, t7	/* Now we have the CRC for 32 bits */
+ .endm
++#endif
++
++#if defined(CONFIG_CRC_POLICY_WARN) || defined(CONFIG_SIZE_POLICY_LEGACY_WARN)
++/* Print a PIC string through the UART initialized by init_system_*. */
++	.macro loader_warning string_label
++	lui	a0, %hi(\string_label)
++	ori	a0, a0, %lo(\string_label)
++	add	a0, a0, gp
++	bal	loader_uart_puts
++	 nop
++	.endm
++#endif
+ 
+ 30:	li	a1, LOADER_SIZE	/* Get loader size */
+ 	add	a0, a1, gp	/* Round up to payload area */
+@@ -161,16 +220,59 @@
+ 	 lw	a1, 4(a0)	/* Get address to move kernel to */
+ 	lw	v0, 8(a0)	/* Get length of data to move */
+ 	lw	a3, 12(a0)	/* Get entry point */
++#if !defined(CONFIG_CRC_POLICY_OFF)
+ 	lw	s1, 16(a0)	/* Get expected CRC */
++#endif
++
++	/* The copy loop moves 32-byte blocks. Reject zero or unaligned sizes
++	 * rather than reading beyond the declared payload. The payload packer
++	 * pads kernels to this alignment before calculating the header CRC. */
++	beqz	v0, 50f
++	 nop
++	andi	t0, v0, 31
++	bnez	t0, 50f
++	 nop
+ 
+-	li	t0, PAYLOAD_SIZE /* Get the maximum payload size */
+-	subu	t0, t0, v0	/* Is the payload too big? */
+-	bltz	t0, 50f		/* Yes, don't try to load it */
+-	 move	t0, a1		/* No, copy load address */
++	/* This hard boundary is never optional. It prevents the copy from
++	 * entering the next fallback flash region. */
++	li	t0, HARD_PAYLOAD_LIMIT
++	sltu	t0, t0, v0	/* t0 = payload size exceeds hard limit */
++	.global loader_hard_size_reject_branch
++loader_hard_size_reject_branch:
++	bnez	t0, 50f
++	 nop
++
++#if defined(CONFIG_SIZE_POLICY_LEGACY_STRICT)
++	li	t0, LEGACY_PAYLOAD_LIMIT
++	sltu	t0, t0, v0
++	.global loader_size_policy_legacy_strict
++loader_size_policy_legacy_strict:
++	bnez	t0, 50f	/* Preserve stock threshold as a hard failure */
++	 nop
++#elif defined(CONFIG_SIZE_POLICY_LEGACY_WARN)
++	li	t0, LEGACY_PAYLOAD_LIMIT
++	sltu	t0, t0, v0
++	beqz	t0, payload_legacy_size_ok
++	 nop
++	.global loader_size_policy_legacy_warn
++loader_size_policy_legacy_warn:
++	move	s2, a0		/* Preserve payload-header pointer */
++	loader_warning loader_size_warning_text
++	move	a0, s2
++payload_legacy_size_ok:
++#elif defined(CONFIG_SIZE_POLICY_HARD_ONLY)
++	.global loader_size_policy_hard_only
++loader_size_policy_hard_only:
++	nop			/* Only the mandatory hard boundary applies */
++#endif
++
++	move	t0, a1		/* Copy load address */
+ 	srl	t0, t0, 28	/* Isolate only top 4 bits */
+ 	li	t2, 8		/* Code must begin at 8xxxxxxx */
+ 	bne	t0, t2, 50f	/* Don't try to load this */
++	 nop
+ 
++#if !defined(CONFIG_CRC_POLICY_OFF)
+ 	lui	a2, %hi(crctab) /* Get CRC table msb */
+ 	ori	a2, %lo(crctab) /* Get CRC table lsb */
+ 	add	a2, a2, gp	/* a2 = crc table (PIC) */
+@@ -178,70 +280,111 @@
+ 	ori	s0, 0xffff	/* s0 = crc accumulator */
+ 
+ /*
+- * The CRC is calculated over the header fields, with the initial CRC
+- * field set to zero.
++ * The CRC is calculated over the header fields, with the CRC field treated
++ * as zero, followed by the padded kernel payload.
+  */
+-
+ 	crc32	t1		/* magic */
+ 	crc32	a1		/* load_addr */
+ 	crc32	v0		/* size */
+ 	crc32	a3		/* entry point */
+-	crc32	zero		/* CRC, initially zero */
++	crc32	zero		/* CRC field is zero while calculating */
+ 	lw	t0, 20(a0)	/* Fetch reserved words */
+ 	lw	t1, 24(a0)
+ 	lw	t2, 28(a0)
+-	addi	a0, 32		/* Point past the header */
++	addiu	a0, a0, 32	/* Point past the header */
+ 	crc32	t0		/* Include reserved words in CRC */
+ 	crc32	t1
+ 	crc32	t2
++#else
++	addiu	a0, a0, 32	/* CRC off: skip the header and copy only */
++#endif
+ 
+ /*
+- * CRC calculator
++ * Payload copy
+  *   a0 -> input data to move (from ROM)
+  *   a1 -> output data (in RAM)
+- *   a2 -> crc table
+  *   a3 -> entry point of final image
+  *   v0 =  byte count to move
+- *   s0 =  CRC accumulator
+- *   s1 =  CRC from header
+  */
+ 
++#if !defined(CONFIG_CRC_POLICY_OFF)
+ 40:	lw	t0, 0(a0)	/* Get four reads in flight */
+ 	lw	t1, 4(a0)
+ 	lw	t2, 8(a0)
+ 	lw	t3, 12(a0)
+ 	crc32	t0		/* Calculate CRC32 hopefully from cache */
+-	crc32	t1		/* ... */
+-	sub	v0, v0, 32	/* Update length */
+-	lw	t4, 16(a0)	/* Get two more reads in flight */
++	crc32	t1
++	subu	v0, v0, 32	/* Update length */
++	lw	t4, 16(a0)
+ 	lw	t5, 20(a0)
+ 	crc32	t2
+ 	crc32	t3
+-	sw	t0, 0(a1)	/* Store two words */
++	sw	t0, 0(a1)
+ 	sw	t1, 4(a1)
+-	lw	t0, 24(a0)	/* Get two more reads in flight */
++	lw	t0, 24(a0)
+ 	lw	t1, 28(a0)
+ 	crc32	t4
+ 	crc32	t5
+-	add	a0, a0, 32	/* Update source pointer */
+-	add	a1, a1, 32	/* Update destination pointer */
+-	sw	t2, -24(a1)	/* Get six stores in flight */
++	addiu	a0, a0, 32
++	addiu	a1, a1, 32
++	sw	t2, -24(a1)
+ 	sw	t3, -20(a1)
+ 	sw	t4, -16(a1)
+ 	sw	t5, -12(a1)
+ 	crc32	t0
+ 	crc32	t1
+-	sw	t0,  -8(a1)
+-	sw	t1,  -4(a1)
+-	pref	0, 8*32(a0)	/* Hint about our read prefetch */
+-	pref	1, 8*32(a1)	/* Hint about our write prefetch */
+-	bgtz	v0, 40b		/* Now loop until we are done */
++	sw	t0, -8(a1)
++	sw	t1, -4(a1)
++	pref	0, 8*32(a0)
++	pref	1, 8*32(a1)
++	bgtz	v0, 40b
+ 	 nop
+ 
+-	xor	s0, s0, s1	/* xor the result with the expected */
+-	addi	s0, 1		/*  ..add one, should be zero */
+-	bnez	s0, 50f		/* It is not, error */
+-	 move	t0, a3		/* Save kernel entry point */
++	xor	s0, s0, s1	/* expected CRC equals one's complement */
++	addiu	s0, s0, 1	/* zero means the CRC matched */
++#if defined(CONFIG_CRC_POLICY_STRICT)
++	.global loader_crc_policy_strict
++loader_crc_policy_strict:
++	bnez	s0, 50f
++	 nop
++#elif defined(CONFIG_CRC_POLICY_WARN)
++	beqz	s0, payload_crc_ok
++	 nop
++	.global loader_crc_policy_warn
++loader_crc_policy_warn:
++	loader_warning loader_crc_warning_text
++payload_crc_ok:
++#endif
++#else
++40:	lw	t0, 0(a0)	/* CRC-off copy-only loop */
++	lw	t1, 4(a0)
++	lw	t2, 8(a0)
++	lw	t3, 12(a0)
++	lw	t4, 16(a0)
++	lw	t5, 20(a0)
++	lw	t6, 24(a0)
++	lw	t7, 28(a0)
++	subu	v0, v0, 32
++	sw	t0, 0(a1)
++	sw	t1, 4(a1)
++	sw	t2, 8(a1)
++	sw	t3, 12(a1)
++	sw	t4, 16(a1)
++	sw	t5, 20(a1)
++	sw	t6, 24(a1)
++	sw	t7, 28(a1)
++	addiu	a0, a0, 32
++	addiu	a1, a1, 32
++	pref	0, 8*32(a0)
++	pref	1, 8*32(a1)
++	bgtz	v0, 40b
++	 nop
++	.global loader_crc_policy_off
++loader_crc_policy_off:
++	nop
++#endif
++
++	move	t0, a3		/* Save kernel entry point */
+ 	lui	a0, 0		/* Clear a0 */
+ 	lui	a1, 0		/*  ...  a1 */
+ 	lui	a2, 0
+@@ -283,6 +426,52 @@
+ 	jr	ra		/* Continue at 4xxxxxxx */
+ 	 nop
+ 
++#if defined(CONFIG_CRC_POLICY_WARN) || defined(CONFIG_SIZE_POLICY_LEGACY_WARN)
++/*
++ * Minimal assembly UART writer used only for validation warnings. The SoC
++ * initialization path has already configured the UART to 115200 8N1.
++ * Clobbers a0 and t6-t9; callers retain live values in saved registers.
++ */
++loader_uart_puts:
++	li	t7, 0x70100000	/* UART_BASE */
++loader_uart_next_char:
++	lbu	t6, 0(a0)
++	beqz	t6, loader_uart_done
++	 addiu	a0, a0, 1
++	li	t9, 10
++	bne	t6, t9, loader_uart_send_char
++	 nop
++	li	t8, 13		/* Emit CR before LF */
++loader_uart_wait_cr:
++	lw	t9, 20(t7)	/* UART line-status register */
++	andi	t9, t9, 0x20	/* UART_LSR_THRE */
++	beqz	t9, loader_uart_wait_cr
++	 nop
++	sw	t8, 0(t7)
++loader_uart_send_char:
++	lw	t9, 20(t7)
++	andi	t9, t9, 0x20
++	beqz	t9, loader_uart_send_char
++	 nop
++	sw	t6, 0(t7)
++	b	loader_uart_next_char
++	 nop
++loader_uart_done:
++	jr	ra
++	 nop
++
++#if defined(CONFIG_SIZE_POLICY_LEGACY_WARN)
++loader_size_warning_text:
++	.asciz "WARNING: payload exceeds legacy size threshold; continuing within hard slot limit\n"
++#endif
++#if defined(CONFIG_CRC_POLICY_WARN)
++loader_crc_warning_text:
++	.asciz "WARNING: payload CRC mismatch; continuing because CRC policy is warn\n"
++#endif
++	.align	4
++#endif
++
++#if !defined(CONFIG_CRC_POLICY_OFF)
+ crctab:
+ 	.word 0x00000000, 0x77073096, 0xee0e612c, 0x990951ba, 0x076dc419
+ 	.word 0x706af48f, 0xe963a535, 0x9e6495a3, 0x0edb8832, 0x79dcb8a4
+@@ -336,6 +525,7 @@
+ 	.word 0xcdd70693, 0x54de5729, 0x23d967bf, 0xb3667a2e, 0xc4614ab8
+ 	.word 0x5d681b02, 0x2a6f2b94, 0xb40bbe37, 0xc30c8ea1, 0x5a05df1b
+ 	.word 0x2d02ef8d
++#endif /* CRC table */
+ 
+ 	.ascii	"LinuxLoader VCoreIII"
+ 
