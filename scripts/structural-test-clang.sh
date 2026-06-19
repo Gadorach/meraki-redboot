@@ -52,7 +52,14 @@ for variant in "${profiles[@]}"; do
   defs+=(-DCONFIG_FALLBACK_REGION_SIZE=0x00400000 \
          -DCONFIG_PAYLOAD_SLOT_END=0x00400000 \
          -DCONFIG_LEGACY_PAYLOAD_LIMIT=0x003bffe0 \
-         -DCONFIG_HARD_PAYLOAD_LIMIT=0x003bffe0)
+         -DCONFIG_HARD_PAYLOAD_LIMIT=0x003bffe0 \
+         -DCONFIG_UART_RAMLOADER=1 \
+         -DCONFIG_UART_RAMLOADER_MAX_SIZE=0x00400000 \
+         -DCONFIG_UART_RAMLOADER_RAM_START=0x81000000 \
+         -DCONFIG_UART_RAMLOADER_RAM_END=0x87f00000 \
+         -DCONFIG_UART_RAMLOADER_PROBE_TIMEOUT_MS=3000 \
+         -DCONFIG_UART_RAMLOADER_INTERBYTE_TIMEOUT_MS=3000 \
+         -DCONFIG_UART_RAMLOADER_COUNT_HZ=208000000)
 
   dir="$tmp/$variant"
   mkdir -p "$dir"
@@ -60,8 +67,10 @@ for variant in "${profiles[@]}"; do
     -c "$root/src/head.S" -o "$dir/head.o"
   clang "${common[@]}" -std=gnu89 -fno-pic -G0 -c "$root/src/init_luton26.c" -o "$dir/init_luton26.o"
   clang "${common[@]}" -std=gnu89 -fno-pic -G0 -c "$root/src/init_jaguar.c" -o "$dir/init_jaguar.o"
+  clang "${common[@]}" -std=gnu89 -fno-pic -G0 "${defs[@]}" \
+    -c "$root/src/uart_ramloader.c" -o "$dir/uart_ramloader.o"
   ld.lld -m elf32ltsmip -static -nostdlib -T "$root/src/loader.lds" \
-    -o "$dir/loader.elf" "$dir/head.o" "$dir/init_luton26.o" "$dir/init_jaguar.o"
+    -o "$dir/loader.elf" "$dir/head.o" "$dir/init_luton26.o" "$dir/init_jaguar.o" "$dir/uart_ramloader.o"
   llvm-objcopy -O binary "$dir/loader.elf" "$dir/loader.bin"
   "$nm_tool" -n "$dir/loader.elf" > "$dir/loader.sym"
   len=$(stat -c %s "$dir/loader.bin")
@@ -77,6 +86,10 @@ for variant in "${profiles[@]}"; do
     --crc-policy "$crc_policy" --size-policy "$size_policy" \
     --loader "$dir/loader.bin" --image "$dir/image.bin" --symbols "$dir/loader.sym"
 done
+
+
+# Exercise the Makefile arithmetic shared by the release wrapper recipe.
+make -C "$root" --no-print-directory test-wrapper-fit
 
 # Exercise the exact CRC/header implementation used by the build helper.
 printf 'structural test kernel\n' > "$tmp/kernel.bin"

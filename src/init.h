@@ -796,7 +796,7 @@ init_system(void)
     init_uart();		/* Initialize console UART */
     ANNOUNCE_LITERAL("LinuxLoader built " __DATE__ " " __TIME__ "\n");
     init_pll();			/* Init PLL, set clocks */
-    init_uart();		/* Fix the UART setup */
+    init_uart();		/* Initialize the UART setup */
     ANNOUNCE_OK();		/* UART working with PLL at a new value */
     init_spi();
     init_memory_subsystem();

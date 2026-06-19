@@ -116,16 +116,20 @@ __start:bal	10f		/* Figure out where we are */
 	ehb			/* Avoid any hazards */
 	bal	init_system_jaguar1 /* Attempt to initialize system */
 	 move	a0, k0		/* Pass the reason */
-	bnez	v0, 20f		/* It is a jaguar1, machine initialized */
+	bnez	v0, 18f		/* It is a Jaguar1-family device */
 	 move	a0, k0		/* Get reason code back */
 
-	bal	init_system_luton26 /* Try luton 26 */
+	bal	init_system_luton26 /* Try Luton26 */
 	 nop
-	bnez	v0, 20f		/* Worked, great */
+	bnez	v0, 19f		/* It is a Luton26-family device */
 	 li	k0, REASON_INITFAILED /* Set up error code */
 	b	loader_fail	/* Unable to initialize */
 	 nop			/* Just loop */
 
+18:	li	s7, 2		/* UART protocol SoC family: Jaguar1 */
+	b	20f
+	 nop
+19:	li	s7, 1		/* UART protocol SoC family: Luton26 */
 20:
 	/* Cache is working, RAM is working, SPI Flash is mapped at
 	 * 0x40000000, DRAM is mapped cached at 0x20000000. Still in
@@ -149,6 +153,13 @@ __start:bal	10f		/* Figure out where we are */
 
 	sw	zero, 0(v0)	/* Get ready to take us out of boot mode */
 	lw	zero, 0(v0)	/* Now take us out of boot mode */
+
+#if defined(CONFIG_UART_RAMLOADER)
+	/* Development recovery hook: after hardware init/boot-mode exit, before
+	 * kernel header validation/copy. Timeout or failed upload returns here. */
+	bal	uart_ramloader_probe_and_run
+	 move	a0, s7		/* Pass detected SoC family */
+#endif
 
 #if !defined(CONFIG_CRC_POLICY_OFF)
 /*

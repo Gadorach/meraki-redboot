@@ -1,0 +1,42 @@
+# Historical validation notes
+
+Standalone VCore-III LinuxLoader source builder validation
+Date: 2026-06-19 (America/Moncton)
+Version: 0.2.0
+
+Completed:
+- Imported loader source and required Vitesse register headers directly from
+  MS42-GPL-sources-3-18-122-master.zip.
+- Replaced historical branch-to-NOP bypasses with source policies:
+  CRC strict/warn/off and size legacy-strict/legacy-warn/hard-only.
+- Implemented a mandatory hard payload boundary derived from a separately configured payload-slot end; the fallback-loader stride may remain farther away.
+- Implemented a true CRC-off copy-only path and conditional removal of the CRC
+  table.
+- Implemented serial warning output in assembly for CRC and legacy-size warning
+  policies.
+- Added zero-length and 32-byte-alignment validation matching the copy loop.
+- Added a payload packer/verifier that pads kernels, generates the 32-byte
+  header, and calculates loader-compatible IEEE CRC-32.
+- Verified the policy patch applies cleanly to an untouched GPL archive and
+  regenerates src/head.S byte-for-byte.
+- Passed eight source-contract and payload-format unit tests.
+- Completed freestanding MIPS32r2 Clang/LLD structural builds for strict,
+  development, and permissive profiles.
+- Validated each 262144-byte wrapper, all vectors, descriptors, embedded loader
+  copies, selected policy symbols, mandatory hard-size branch, conditional CRC
+  table, and conditional UART warning code.
+- Payload pack/verify round-trip passed with independently recomputed zlib CRC.
+
+Structural build sizes observed with the available Clang/LLD test path:
+- strict loader:      15928 bytes
+- development loader: 16232 bytes
+- permissive loader:  12840 bytes
+
+Not completed in this environment:
+- Release build using GNU mipsel-linux-gnu-gcc/binutils.
+- Boot execution on a physical MS220/MS320/MS42 VCore-III switch.
+
+The GNU cross build is the release path. The included Clang test uses non-PIC C
+objects because Clang rejects the historical GCC combination of -fPIC and
+-mno-abicalls; it proves source completeness, policy selection, linking, and
+wrapper structure, not compiler-identical production code generation.
