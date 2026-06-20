@@ -1,68 +1,37 @@
-# Stage-2 UART menu and PMOSRAM protocol v2
+# UART RAM loader and PMOSREC
 
-A UART-enabled loader copies a fixed-address stage to `0xa7f00000`. The stage
-contains the PMOSRAM executable uploader plus the Luton26 and Jaguar1 firmware
-recovery programs.
+The fixed-RAM stage exposes a stable 115200-baud `PMOSRAM2` executable loader.
+It validates header geometry, load and entry ranges, frame CRC-32, complete
+object CRC-32 and SHA-256 before invalidating caches and entering the uploaded
+program.
 
-## Boot menu
+The normal recovery executable is PMOSREC v3. Keeping the permanent loader
+simple and fixed-rate allows adaptive UART, sparse transport, LZ4 and flash
+logic to evolve in a replaceable RAM payload.
 
-Normal boot prints:
+## Menu paths
+
+1. `UART-RAMLOADER` uploads a current PMOSREC executable.
+2. `FW-RECOVERY` launches the PMOSREC executable embedded in the installed
+   loader.
+
+Menu option 1 is preferred during development and whenever the installed
+loader's embedded recovery contract is older than the host tooling.
+
+## PMOSREC v3 handoff
+
+After `PMOSRAM VERIFIED` and `PMOSRAM EXEC`, the host requires:
 
 ```text
-PMOSBOOT MENU-PROBE TIMEOUT_MS=00000bb8
+PMOSREC READY 3
+PMOSREC DESCRIPTOR PMOSRECOVERY3;...;PROTO=3;PREFLIGHT=4;...;END
+PMOSREC UART-CAP ...
+PMOSREC FLASH-PREFLIGHT-OK ...
+PMOSREC COMMAND-READY 3
 ```
 
-No input for three seconds continues flash-kernel validation. Any received byte
-opens the menu, but that trigger byte is discarded:
+Only then does adaptive rate qualification begin. A failed PMOSREC experiment
+is recovered by power cycling and returning to the unchanged 115200-baud RAM
+loader.
 
-```text
-PMOSBOOT MENU 1=UART-RAMLOADER 2=FW-RECOVERY
-PMOSBOOT MENU-READY TIMEOUT_MS=00001388
-```
-
-A fresh explicit `1` or `2` is required within five seconds. Invalid characters
-are reported as `WARN-MENU-INPUT`; timeout reports `WARN-MENU-TIMEOUT` and
-continues normal boot. This prevents incidental UART noise from permanently
-halting startup.
-
-- `1`: persistent PMOSRAM executable uploader; power-cycle to exit.
-- `2`: copy the embedded recovery matching the detected SoC to `0x81000000`
-  and execute it.
-
-Fatal flash-kernel checks also launch the matching embedded recovery directly.
-The old next-flash-region fallback address is retained only in context output.
-
-## PMOSRAM wire contract
-
-The little-endian 72-byte header contains `PMOSRAM2`, protocol version 2, flags,
-load/entry addresses, object size, chunk size, whole-object CRC-32 and SHA-256,
-and header CRC-32. Each frame contains `RMF2`, sequence, length, CRC-32, and
-payload bytes. Accepted frames receive ACK; sequence/CRC errors receive NACK.
-
-All header, address, size, CRC, SHA, and execution checks emit structured
-`PASS-*`, `WARN-*`, `FAIL-*`, or `SKIP-*` records with compared values.
-
-## Host tools
-
-The normal uploader automatically performs the menu handshake and selects
-option 1:
-
-```sh
-python3 tools/uart_ramload_send.py \
-  --port /dev/ttyUSB0 \
-  --binary diagnostic.bin \
-  --load-address 0x81000000 \
-  --entry 0x81000000 \
-  --follow
-```
-
-Use the menu-only helper to test either option:
-
-```sh
-python3 tools/uart_boot_menu.py --port /dev/ttyUSB0 --choice 1 --follow
-python3 tools/uart_boot_menu.py --port /dev/ttyUSB0 --choice 2 --follow
-```
-
-Only one process may own the serial port. The recovery payload executes with
-pre-kernel physical access; destructive flashing still requires its package,
-manifest validation, and explicit erase challenge response.
+The success path uses the family soft-chip reset and then arms the ICPU watchdog if execution unexpectedly continues.

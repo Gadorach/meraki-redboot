@@ -25,6 +25,6 @@ for family in 1 2; do
   first_word=$(od -An -tx4 -N4 "$tmp/recovery-$family.bin" | tr -d ' \n')
   test -n "$first_word"
 done
-grep -a -q 'PMOSRECOVERY2;SOC=luton26' "$tmp/recovery-1.bin"
-grep -a -q 'PMOSRECOVERY2;SOC=jaguar1' "$tmp/recovery-2.bin"
+grep -a -q 'PMOSRECOVERY3;SOC=luton26' "$tmp/recovery-1.bin"
+grep -a -q 'PMOSRECOVERY3;SOC=jaguar1' "$tmp/recovery-2.bin"
 echo 'Clang recovery payload structural builds passed with byte-zero entry for Luton26 and Jaguar1.'

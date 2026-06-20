@@ -36,7 +36,7 @@ python3 tools/uart_ramload_send.py \
 ```
 
 The tool triggers the menu, selects `1`, uploads, verifies CRC/SHA, and executes
-the binary. `PMOSREC READY 2 SOC=jaguar1` proves the RAM-loader path works.
+the binary. `PMOSREC READY 3 SOC=jaguar1` proves the RAM-loader path works.
 
 ## Embedded recovery option 2
 
@@ -45,7 +45,7 @@ python3 tools/uart_boot_menu.py --port /dev/ttyUSB0 --choice 2 --follow
 ```
 
 Expected markers include `PASS-RECOVERY-SIZE`, `PASS-RECOVERY-COPY`,
-`PASS-RECOVERY-EXEC`, and `PMOSREC READY 2` for the detected family. Without a
+`PASS-RECOVERY-EXEC`, and `PMOSREC READY 3` for the detected family. Without a
 firmware package the recovery program times out and halts without erasing flash.
 
 ## Automatic recovery

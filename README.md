@@ -132,11 +132,27 @@ protocol provides:
 - D-cache writeback/invalidate and I-cache invalidate before execution;
 - detected SoC-family reporting.
 
-The companion `PMOSPKG2` recovery payloads are built separately for Luton26 and
-Jaguar-class SPI register maps and embedded into every UART-enabled stage. They validate the release package, exact model,
-loader digest, firmware layout, flash geometry, JEDEC ID, protection and status
-state, and payload descriptor before the destructive confirmation and full-NOR
-write path.
+The companion PMOSREC v3 recovery payloads are built separately for Luton26 and
+Jaguar-class SPI register maps and embedded into every UART-enabled stage. The
+RAM-loader bootstrap remains at 115200 baud; PMOSREC then qualifies target-generated
+baud rates, 4 KiB windowed transfer, compact CRC-protected acknowledgements,
+sparse reconstruction and independent LZ4 blocks. It validates the manifest
+before the image and verifies the complete reconstructed 16 MiB SHA-256 before
+the destructive confirmation and full-NOR write path.
+
+
+## PMOSREC v3 adaptive recovery
+
+The boot menu and `PMOSRAM2` executable upload remain fixed at 115200 baud. The
+RAM-resident PMOSREC v3 stage negotiates the nearest target-generated UART rate,
+qualifies it bidirectionally with deterministic CRC streams, and independently
+rolls back on failure. It then qualifies 4 KiB frames, windows up to 16 frames,
+compact cumulative ACKs, sparse reconstruction and LZ4 blocks. The manifest is
+validated before the image and the complete reconstructed image is SHA-256
+verified before erase authorization.
+
+See `payloads/uart-firmware-recovery/README.md` for the complete protocol and
+integrity contract.
 
 Primary outputs:
 

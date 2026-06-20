@@ -1,8 +1,9 @@
-# Pre-kernel UART firmware recovery payload
+# PMOSREC v3 pre-kernel UART firmware recovery
 
-This freestanding MIPS payload is uploaded through LinuxLoader's `PMOSRAM2`
-protocol and implements manifest-bound full-NOR recovery without Linux, MTD,
-SSH, or networking.
+This freestanding MIPS payload is launched by LinuxLoader after either an
+embedded recovery selection or a verified `PMOSRAM2` executable upload. It
+implements manifest-bound full-NOR recovery without Linux, MTD, SSH or
+networking.
 
 Two target-specific binaries are produced:
 
@@ -11,106 +12,99 @@ artifacts/recovery-luton26.bin
 artifacts/recovery-jaguar1.bin
 ```
 
-Each binary has a descriptor JSON and SHA-256 sidecar. The descriptor binds:
+Each binary has a descriptor JSON and SHA-256 sidecar. The descriptor binds the
+SoC family, SPI register map, exact accepted models, flash geometry, JEDEC IDs,
+entry contract, manifest parser, adaptive transport and integrity algorithms.
 
-- protocol version;
-- SoC family and family ID;
-- SPI software-mode register address;
-- exact accepted model list;
-- 16 MiB flash geometry;
-- accepted JEDEC IDs;
-- supported operations and transport-integrity algorithms;
-- payload filename, byte count, and SHA-256.
+## Stable bootstrap
 
-Build both variants with:
+The meraki-redboot menu and RAM-loader executable transfer always remain at
+115200 baud. PMOSREC begins adaptive negotiation only after its executable has
+passed RAM-loader CRC-32 and SHA-256 validation and entered at `0x81000000`.
 
-```sh
-make
-```
+## Protocol v3
 
-## Package protocol
+PMOSREC reports `PMOSREC READY 3` and a `PMOSRECOVERY3` descriptor. The host
+proposes UART rates and the target returns the nearest rate its current UART
+clock and divisor can generate. Every candidate is qualified in both directions
+with deterministic pseudorandom streams and known CRC-32 values.
 
-The host sends a `PMOSPKG2` header followed by acknowledged `PKF2` frames for:
+Both sides independently retain the previous known-good rate. A failed
+candidate causes the target to restore its previous divisor and emit fallback
+beacons. The host restores the same rate independently. Rate refinement stops
+when the gap to the nearest failure is no more than two percent.
 
-1. an exact 16 MiB firmware image;
-2. its JSON release manifest.
+Preferred transfer parameters are:
 
-Every frame carries CRC-32. Each complete object is checked with CRC-32 and
-SHA-256. The target then enforces all of the following before it can present an
-erase challenge:
+- 4096-byte decoded frames, with 1024-byte fallback;
+- windows of 16, 8, 4 or 1 frames;
+- binary cumulative ACK/NAK records;
+- selective retry bitmap;
+- CRC-32 for frame headers, wire bytes, decoded bytes and ACK records.
 
-- target family and exact model are accepted by the compiled payload;
-- the release manifest marks the model `validated`, `confirmed`, or explicitly
-  acknowledged `untested`;
-- artifact size, SHA-256, boot-chain identifier, SPIM kernel signature, and
-  SquashFS signature match the staged image;
-- the image contains a protocol-v2 UART-capable loader whose 256 KiB digest
-  matches the manifest;
-- the manifest enables UART firmware recovery protocol v2 and declares the
-  requested operation and integrity algorithms;
-- payload family, SPI register, exact model list, payload record, flash
-  geometry, and loader SoC-family record are consistent;
-- the detected JEDEC ID is present in both the compiled device table and the
-  release manifest;
-- the flash is 16 MiB, uses the declared erase/page geometry, is not busy or
-  block-protected, and reports no device-specific error flags.
+A lost one-byte ACK confirmation cannot corrupt the next frame: PMOSREC accepts
+and preserves the first byte of the next frame magic in a pushback slot when
+necessary.
 
-## Operations
+## Sparse and LZ4 representations
 
-- `verify` is host-only and never opens the serial port.
-- `dry-run` uploads the payload, image, and manifest and performs target-side
-  validation and flash preflight without erase or program commands.
-- `flash` requires a target-generated nonce. The host must return the exact
-  `ERASEFLASH <nonce>` line before any erase begins.
+At the selected rate, the host qualifies raw, sparse, LZ4 and sparse-LZ4
+transports using a synthetic object. Optional modes that fail are disabled
+without ending recovery.
 
-Erase and program operations verify write-enable state, use bounded device
-operation timeouts, inspect completion/error status, verify each erased block,
-and perform a full byte-for-byte readback after programming. The target emits a
-deterministic terminal success, abort, or error line.
+LZ4 is block-independent. Each frame carries both compressed-wire and decoded
+CRC-32 values. Sparse frames omit complete `0xff` ranges. PMOSREC initializes
+the 16 MiB staging buffer to `0xff`, applies received extents, and then verifies
+CRC-32 and SHA-256 over the complete reconstructed image.
 
-The image transfer has a 45-minute overall deadline, each frame is bounded, and
-the confirmation line has a 60-second deadline. This path always overwrites the
-complete 16 MiB device. Keep an external SPI programmer connected only while
-the switch is unpowered, and retain verified backups.
+## Manifest-first order
 
-## SPI controller bring-up and hardware preflight
+The release manifest is transferred before the firmware object. PMOSREC checks
+model compatibility, SoC family, image size, loader/recovery contracts, flash
+geometry, JEDEC allow-list and declared image digest before accepting the large
+payload.
 
-The recovery stage prepares the SoC SPI interface before its first NOR command.
-On Jaguar1 it preserves the existing `GENERAL_CTRL` value and sets
-`IF_MASTER_SPI_ENA`. It also follows the MSCC software-SPI active-mask contract:
-`SW_SPI_CS=BIT(0)` asserts CS0 and `SW_SPI_CS=0` deselects all devices. Treating
-that field as active-low levels leaves CS0 unselected and produces a false
-`ffffff` JEDEC value. Luton26 uses the same active-mask software-SPI semantics
-while retaining its family-specific controller policy.
+The image cannot reach erase authorization until:
 
-Immediately after the descriptor, the stage now performs a short, non-writing
-hardware check and emits:
+- every frame and compact ACK has passed CRC-32;
+- manifest and image objects have passed CRC-32 and SHA-256;
+- the reconstructed 16 MiB image matches the authoritative digest;
+- SPIM kernel and SquashFS layout checks pass;
+- flash status, protection and device-specific error checks pass.
+
+## Confirmation and reset
+
+After validation, PMOSREC emits `ERASEFLASH <nonce>`. Incorrect confirmation
+text does not terminate the session; the stage repeats the expected command and
+waits indefinitely. Power cycling cancels.
+
+After erase, program and complete readback verification, PMOSREC prints a
+five-second countdown, requests the family-specific SoC soft-chip reset, and arms the family-specific ICPU watchdog if execution continues.
+
+## Hardware preflight
+
+Before accepting commands, PMOSREC enables and verifies the SPI controller,
+reads JEDEC ID, status and SFDP, and rejects a no-response bus.
+
+The `PMOS3 PREFLIGHT` operation additionally:
+
+1. CRC-checks the complete 256 KiB bootloader region;
+2. backs up one non-loader 64 KiB sector;
+3. erases and verifies it;
+4. programs and verifies every page;
+5. erases and restores the original sector;
+6. verifies the restored sector and unchanged bootloader CRC-32.
+
+The target rejects any scratch sector below `0x00040000`. The default is
+`0x00ff0000`.
+
+## Current contracts
 
 ```text
-PMOSREC SPI-GENERAL BEFORE=... REQUESTED=... OBSERVED=...
-PMOSREC FLASH-ID c22018
-PMOSREC SFDP 53464450 STATUS=PASS
-PMOSREC FLASH-PREFLIGHT-OK ID=c22018 ERASE=00010000 PAGE=00000100
-PMOSREC COMMAND-READY 1
+format=postmerkos.uart-recovery-payload.v3
+protocol_version=3
+entry_contract=flat-binary-byte-zero-v1
+manifest_lookup_contract=direct-object-members-v1
+hardware_preflight_contract=spi-nor-scratch-rw-restore-loader-crc-v4
+adaptive_transport_contract=pmosrec-v3-adaptive-uart-sparse-lz4-v1
 ```
-
-The host sends no package bytes until `COMMAND-READY 1`. A missing device response
-is reported as `FLASH-NO-RESPONSE`, before the 16 MiB transfer begins.
-
-A fourth operation, `preflight`, exercises all SPI NOR primitives without touching
-the bootloader. The host sends a `PMOSPFT1` request selecting one aligned 64 KiB
-sector at or above `0x00040000`. The target:
-
-1. reads and CRC-32 records the complete original sector;
-2. erases it and verifies every byte is `0xff`;
-3. programs a deterministic pattern through every 256-byte page;
-4. reads and verifies the complete pattern;
-5. erases the sector again;
-6. restores the complete original sector and verifies it byte-for-byte;
-7. CRC-checks the complete 256 KiB bootloader region before and after the test and
-   requires an exact match before reporting success.
-
-The default scratch sector is `0x00ff0000`, the final 64 KiB sector of a 16 MiB
-part. Requests overlapping `0x00000000..0x0003ffff`, crossing the flash boundary,
-or omitting restoration are rejected before any write. A restoration failure is
-reported separately as `PREFLIGHT-RESTORE-FAILED`.

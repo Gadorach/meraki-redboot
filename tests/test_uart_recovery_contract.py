@@ -176,26 +176,36 @@ class UartRecoveryContractTests(unittest.TestCase):
 
     def test_recovery_enforces_manifest_flash_and_terminal_contracts(self) -> None:
         for token in (
-            "PMOSRECOVERY2;SOC=", "PKG_MAGIC1", "PMOSPKG VERIFIED",
-            "PMOSREC ERASE-CHALLENGE", "PMOSREC RESULT DRY-RUN-OK",
+            "PMOSRECOVERY3;SOC=", "PACKAGE_PROTOCOL_VERSION 3u", "PMOSPKG VERIFIED",
+            "PMOSREC ERASE-CHALLENGE", "PMOSREC CONFIRMATION-REJECTED",
+            "RETRY=FOREVER", "PMOSREC RESULT DRY-RUN-OK",
             "PMOSREC RESULT SUCCESS", "PMOSREC RESULT ERROR",
             "spi_verify_full", "spi_read_id", "spi_wait_ready", "FLASH-PROTECTED",
             "spi_check_completion", "FLASH-FLAG-", "accepted_jedec_ids",
             "PACKAGE_HEADER_TIMEOUT_MS", "OBJECT_TRANSFER_TIMEOUT_MS",
-            "CONFIRM_TIMEOUT_MS", "struct pmos_timer", "PMOSREC COMMAND-READY 1",
-            "PMOSPFT HEADER-ACK", "spi_scratch_preflight", "SPI-GENERAL",
-            "FLASH-PREFLIGHT-OK", "PREFLIGHT-RESTORE-FAILED",
+            "V3_FRAME_TIMEOUT_MS 30000u", "CONFIRM_TIMEOUT_MS", "struct pmos_timer",
+            "PMOSREC COMMAND-READY 3", "PMOSPFT HEADER-ACK", "spi_scratch_preflight",
+            "SPI-GENERAL", "FLASH-PREFLIGHT-OK", "PREFLIGHT-RESTORE-FAILED",
             "PREFLIGHT-BOOTLOADER-CHANGED", "BOOTLOADER-UNCHANGED",
             "image_sha256", "manifest_sha256", "target_family", "boot_chain",
             "uart_firmware", "flash_geometry", "accepted_models",
             "MANIFEST-RECOVERY-CAPABILITY", "MANIFEST-LOADER-DIGEST",
+            "adaptive_transport_contract", "compact-ack-crc32",
+            "reconstructed-image-sha256", "PMOS3 MANIFEST-ACCEPTED",
+            "PMOS3 BAUD-CANDIDATE", "PMOS3 BAUD-FALLBACK-READY",
+            "FRAME_MAX=4096", "WINDOW_MAX=16", "ACKFMT=BIN1",
+            "SPARSE=1", "LZ4=1", "AUTO_CONFIRM=1", "AUTO_REBOOT=1",
+            "target_reboot", 'puts_b("PMOSREC REBOOT ")',
         ):
             self.assertIn(token, RECOVERY_SOURCE)
         self.assertNotIn("current-artifact-validated", RECOVERY_SOURCE)
         self.assertNotIn("historically-validated", RECOVERY_SOURCE)
-        self.assertIn("recv_exact(prefix, sizeof(prefix), PACKAGE_HEADER_TIMEOUT_MS)", RECOVERY_SOURCE)
-        self.assertIn("recv_exact(raw + 8u, PACKAGE_HEADER_BYTES - 8u, PACKAGE_HEADER_TIMEOUT_MS)", RECOVERY_SOURCE)
-        self.assertNotIn("recv_exact(raw, PACKAGE_HEADER_BYTES, INTERBYTE_TIMEOUT_MS)", RECOVERY_SOURCE)
+        self.assertIn("recv_exact(raw, sizeof(raw), PACKAGE_HEADER_TIMEOUT_MS)", RECOVERY_SOURCE)
+        self.assertIn("receive_v3_object(MANIFEST_BASE", RECOVERY_SOURCE)
+        self.assertLess(
+            RECOVERY_SOURCE.index("receive_v3_object(MANIFEST_BASE"),
+            RECOVERY_SOURCE.index("receive_v3_object(STAGING_BASE"),
+        )
 
     def test_recovery_preflight_preserves_bootloader_and_restores_scratch(self) -> None:
         self.assertIn("request->scratch_address < LOADER_REGION_SIZE", RECOVERY_SOURCE)
@@ -208,15 +218,28 @@ class UartRecoveryContractTests(unittest.TestCase):
         self.assertIn("PMOSREC RESULT PREFLIGHT-OK", RECOVERY_SOURCE)
 
 
-    def test_duplicate_frames_are_exact_and_wrap_safe(self) -> None:
+    def test_success_reboot_has_soft_reset_and_watchdog_fallback(self) -> None:
+        source = (ROOT / "payloads/uart-firmware-recovery/recovery.c").read_text()
+        self.assertIn("#define SOFT_CHIP_RESET_ADDR 0x60070090u", source)
+        self.assertIn("#define SOFT_CHIP_RESET_ADDR 0x60010090u", source)
+        self.assertIn("#define WATCHDOG_TIMER_ADDR  0x70000208u", source)
+        self.assertIn("#define WATCHDOG_TIMER_ADDR  0x70000200u", source)
+        self.assertIn("WATCHDOG_ENABLE_BIT | WATCHDOG_LOCK_FAST", source)
+        self.assertIn("PMOSREC REBOOT FALLBACK-WATCHDOG", source)
+
+    def test_window_acknowledgements_are_recoverable_and_crc_protected(self) -> None:
+        # RAM loader retains exact duplicate-frame semantics. PMOSREC v3 instead
+        # keeps each target ACK pending until the host confirms it, so a damaged
+        # ACK cannot advance or desynchronize the receive window.
         self.assertIn("expected_sequence != 0u && frame.sequence == expected_sequence - 1u", LOADER_SOURCE)
         self.assertIn("frame.length == previous_length", LOADER_SOURCE)
         self.assertIn("frame.crc32 == previous_crc", LOADER_SOURCE)
-        self.assertNotIn("frame.sequence + 1u == expected_sequence", LOADER_SOURCE)
-        self.assertIn("sequence != 0u && frame.sequence == sequence - 1u", RECOVERY_SOURCE)
-        self.assertIn("frame.length == previous_length", RECOVERY_SOURCE)
-        self.assertIn("frame.crc32 == previous_crc", RECOVERY_SOURCE)
-        self.assertNotIn("frame.sequence + 1u == sequence", RECOVERY_SOURCE)
+        self.assertIn("ACK_CONFIRM_BYTE", RECOVERY_SOURCE)
+        self.assertIn("ACK_CONFIRM_RETRIES", RECOVERY_SOURCE)
+        self.assertIn("confirmation == ACK_CONFIRM_BYTE", RECOVERY_SOURCE)
+        self.assertIn("pmos_crc32(raw, 24u)", RECOVERY_SOURCE)
+        self.assertIn("retry_bitmap", RECOVERY_SOURCE)
+        self.assertIn("frame_slot_mark", RECOVERY_SOURCE)
 
     def test_recovery_object_deadline_is_enforced(self) -> None:
         self.assertIn("timer_start(&transfer_timer)", RECOVERY_SOURCE)

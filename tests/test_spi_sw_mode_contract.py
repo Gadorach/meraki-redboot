@@ -14,7 +14,8 @@ required = [
     "value &= ~SPI_SW_SCK_OE;",
     "spi_write(0u);",
     "PMOSREC SPI-CS-CONTRACT ACTIVE-MASK",
-    "PREFLIGHT=3",
+    "PMOSRECOVERY3",
+    "PREFLIGHT=4",
 ]
 for token in required:
     assert token in SOURCE, token

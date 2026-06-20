@@ -24,12 +24,12 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     data = args.binary.read_bytes()
-    marker = f"PMOSRECOVERY2;SOC={args.family};FAMILY={args.family_id};SPI={args.spi_address:08x};PROTO=2;PREFLIGHT=3;END".encode()
+    marker = f"PMOSRECOVERY3;SOC={args.family};FAMILY={args.family_id};SPI={args.spi_address:08x};PROTO=3;PREFLIGHT=4;BAUDTEST=1;FRAME_MAX=4096;WINDOW_MAX=16;ACKFMT=BIN1;SPARSE=1;LZ4=1;CONFIRM_RETRY=1;AUTO_CONFIRM=1;AUTO_REBOOT=1;END".encode()
     if marker not in data:
         raise SystemExit("compiled payload does not contain its machine-readable descriptor")
     descriptor = {
-        "format": "postmerkos.uart-recovery-payload.v2",
-        "protocol_version": 2,
+        "format": "postmerkos.uart-recovery-payload.v3",
+        "protocol_version": 3,
         "soc_family": args.family,
         "soc_family_id": args.family_id,
         "spi_software_mode_address": args.spi_address,
@@ -43,12 +43,27 @@ def main() -> int:
             "address_bytes": 3,
         },
         "operations": ["verify", "preflight", "dry-run", "flash"],
-        "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
+        "transport_integrity": ["frame-crc32", "compact-ack-crc32", "object-crc32", "object-sha256", "reconstructed-image-sha256"],
+        "adaptive_transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
+        "adaptive_transport": {
+            "stable_bootstrap_baud": 115200,
+            "target_divisor_negotiation": True,
+            "bidirectional_prng_crc_test": True,
+            "autonomous_baud_fallback": True,
+            "baud_refinement_percent": 2,
+            "frame_sizes": [1024, 4096],
+            "maximum_window_frames": 16,
+            "ack_format": "binary-cumulative-selective-retry-v1",
+            "manifest_first": True,
+            "representations": ["raw", "sparse", "lz4", "sparse-lz4"],
+            "confirmation_retry": "infinite",
+            "automatic_reboot_seconds": 5,
+        },
         "load_address": 0x81000000,
         "entry_address": 0x81000000,
         "entry_contract": "flat-binary-byte-zero-v1",
         "manifest_lookup_contract": "direct-object-members-v1",
-        "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v3",
+        "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
         "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
         "preflight_scratch": {
             "default_address": 0x00FF0000,

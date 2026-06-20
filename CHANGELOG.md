@@ -224,3 +224,18 @@ Development records and prior release notes are maintained under:
 - Added `PREFLIGHT=3` and `spi-nor-scratch-rw-restore-loader-crc-v3` so stale payloads with inverted CS handling are rejected.
 - Added an early `SPI-CS-CONTRACT ACTIVE-MASK` diagnostic before JEDEC probing.
 
+
+## Unreleased — PMOSREC v3 adaptive UART recovery
+
+- Kept the boot menu and PMOSRAM2 executable upload at the stable 115200 baud.
+- Added target-divisor baud offers, bidirectional deterministic CRC qualification,
+  autonomous rollback and two-percent rate refinement.
+- Added 4096-byte frames, negotiated windows, CRC-protected compact cumulative
+  ACK/NAK records and selective retransmission.
+- Added manifest-first validation and raw, sparse, LZ4 and sparse-LZ4 transport
+  qualification with full reconstructed-image SHA-256 verification.
+- Added indefinite erase-confirmation retries, host-authorized automatic challenge
+  response support, phase progress and a five-second target-side reset countdown.
+- Added a family-specific ICPU watchdog fallback if the soft-chip reset request does not take effect.
+- Published `PREFLIGHT=4`, protocol 3 and
+  `pmosrec-v3-adaptive-uart-sparse-lz4-v1` capability boundaries.
