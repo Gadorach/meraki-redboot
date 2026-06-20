@@ -59,7 +59,23 @@ typedef pmos_u32 u32;
 #define OBJECT_TRANSFER_TIMEOUT_MS (45u * 60u * 1000u)
 #define CONFIRM_TIMEOUT_MS 0xffffffffu
 #define BAUD_TEST_TIMEOUT_MS 6000u
-#define V3_FRAME_TIMEOUT_MS 30000u
+#define V3_FRAME_TIMEOUT_MS 5000u
+#define FEATURE_DRAIN_IDLE_MS 20u
+#define FEATURE_DRAIN_MAX_MS 5000u
+#define V3_FRAME_ERROR_NONE 0u
+#define V3_FRAME_ERROR_HEADER_TIMEOUT 1u
+#define V3_FRAME_ERROR_HEADER_CRC 2u
+#define V3_FRAME_ERROR_MAGIC 3u
+#define V3_FRAME_ERROR_OBJECT 4u
+#define V3_FRAME_ERROR_SEQUENCE 5u
+#define V3_FRAME_ERROR_GEOMETRY 6u
+#define V3_FRAME_ERROR_PAYLOAD_TIMEOUT 7u
+#define V3_FRAME_ERROR_WIRE_CRC 8u
+#define V3_FRAME_ERROR_DECODE 9u
+#define V3_FRAME_ERROR_DECODED_CRC 10u
+#define V3_FRAME_ERROR_SLOT 11u
+#define V3_FRAME_ERROR_OBJECT_CRC 12u
+#define V3_FRAME_ERROR_OBJECT_SHA 13u
 #define UART_BASELINE_BAUD 115200u
 #define V3_FRAME_FLAG_LZ4 0x00000001u
 #define V3_REPR_RAW 0u
@@ -214,6 +230,8 @@ static u8 preflight_page[256];
 static u32 uart_error_flags;
 static u32 uart_pushback_valid;
 static u8 uart_pushback_byte;
+static u32 v3_last_frame_error;
+static u32 v3_last_expected_sequence;
 
 static u32 cp0_count(void)
 {
@@ -1208,6 +1226,32 @@ static void sleep_ms(u32 milliseconds)
     while (!timer_expired(&timer, milliseconds)) {}
 }
 
+static u32 uart_drain_until_idle(u32 idle_ms, u32 maximum_ms)
+{
+    struct pmos_timer idle_timer, total_timer;
+    u32 dropped = 0u;
+    timer_start(&idle_timer);
+    timer_start(&total_timer);
+    while (!timer_expired(&total_timer, maximum_ms)) {
+        if (rx_ready()) {
+            (void)uart[0];
+            dropped++;
+            timer_start(&idle_timer);
+            continue;
+        }
+        if (timer_expired(&idle_timer, idle_ms)) break;
+    }
+    return dropped;
+}
+
+static int v3_recover_single_frame_boundary(u32 allow_retry)
+{
+    if (!allow_retry) return -1;
+    uart_pushback_valid = 0u;
+    (void)uart_drain_until_idle(FEATURE_DRAIN_IDLE_MS, FEATURE_DRAIN_MAX_MS);
+    return 1;
+}
+
 static void uart_wait_tx_empty(void)
 {
     while ((uart[UART_LSR / 4] & UART_LSR_TEMT) == 0u) {}
@@ -1465,36 +1509,79 @@ static void parse_v3_frame_header(struct frame_header *header, const u8 raw[FRAM
 }
 
 static int receive_v3_frame(u8 *destination, u32 destination_size, u32 object_id,
-                            u32 expected_sequence, u32 frame_size, u32 retry)
+                            u32 expected_sequence, u32 frame_size, u32 retry,
+                            u32 allow_header_retry)
 {
     u8 raw[FRAME_HEADER_BYTES];
     struct frame_header frame;
     u32 decoded = 0u, i;
-    if (!recv_exact(raw, sizeof(raw), V3_FRAME_TIMEOUT_MS)) return -1;
+    v3_last_expected_sequence = expected_sequence;
+    v3_last_frame_error = V3_FRAME_ERROR_NONE;
+    if (!recv_exact(raw, sizeof(raw), V3_FRAME_TIMEOUT_MS)) {
+        v3_last_frame_error = V3_FRAME_ERROR_HEADER_TIMEOUT;
+        return v3_recover_single_frame_boundary(allow_header_retry);
+    }
     parse_v3_frame_header(&frame, raw);
-    if (frame.header_crc32 != pmos_crc32(raw, FRAME_HEADER_BYTES - 4u) ||
-        frame.magic != FRAME_MAGIC || frame.object_id != object_id ||
-        frame.sequence != expected_sequence || frame.wire_length == 0u ||
-        frame.wire_length > MAX_WIRE_CHUNK || frame.decoded_length == 0u ||
-        frame.decoded_length > frame_size || frame.offset > destination_size ||
+    if (frame.header_crc32 != pmos_crc32(raw, FRAME_HEADER_BYTES - 4u)) {
+        v3_last_frame_error = V3_FRAME_ERROR_HEADER_CRC;
+        return v3_recover_single_frame_boundary(allow_header_retry);
+    }
+    if (frame.magic != FRAME_MAGIC) {
+        v3_last_frame_error = V3_FRAME_ERROR_MAGIC;
+        return v3_recover_single_frame_boundary(allow_header_retry);
+    }
+    if (frame.object_id != object_id) {
+        v3_last_frame_error = V3_FRAME_ERROR_OBJECT;
+        return v3_recover_single_frame_boundary(allow_header_retry);
+    }
+    if (frame.sequence != expected_sequence) {
+        v3_last_frame_error = V3_FRAME_ERROR_SEQUENCE;
+        return v3_recover_single_frame_boundary(allow_header_retry);
+    }
+    if (frame.wire_length == 0u || frame.wire_length > MAX_WIRE_CHUNK ||
+        frame.decoded_length == 0u || frame.decoded_length > frame_size ||
+        frame.offset > destination_size ||
         frame.decoded_length > destination_size - frame.offset ||
-        (frame.flags & ~V3_FRAME_FLAG_LZ4) != 0u) return -1;
-    if (!recv_exact(v3_wire_buffer, frame.wire_length, V3_FRAME_TIMEOUT_MS)) return -1;
-    if (pmos_crc32(v3_wire_buffer, frame.wire_length) != frame.wire_crc32) return 1;
+        (frame.flags & ~V3_FRAME_FLAG_LZ4) != 0u) {
+        v3_last_frame_error = V3_FRAME_ERROR_GEOMETRY;
+        return v3_recover_single_frame_boundary(allow_header_retry);
+    }
+    if (!recv_exact(v3_wire_buffer, frame.wire_length, V3_FRAME_TIMEOUT_MS)) {
+        v3_last_frame_error = V3_FRAME_ERROR_PAYLOAD_TIMEOUT;
+        return v3_recover_single_frame_boundary(allow_header_retry);
+    }
+    if (pmos_crc32(v3_wire_buffer, frame.wire_length) != frame.wire_crc32) {
+        v3_last_frame_error = V3_FRAME_ERROR_WIRE_CRC;
+        return 1;
+    }
     if ((frame.flags & V3_FRAME_FLAG_LZ4) != 0u) {
         if (!lz4_decompress_block(v3_wire_buffer, frame.wire_length,
                                   v3_decode_buffer, frame_size, &decoded) ||
-            decoded != frame.decoded_length) return 1;
+            decoded != frame.decoded_length) {
+            v3_last_frame_error = V3_FRAME_ERROR_DECODE;
+            return 1;
+        }
     } else {
-        if (frame.wire_length != frame.decoded_length) return 1;
+        if (frame.wire_length != frame.decoded_length) {
+            v3_last_frame_error = V3_FRAME_ERROR_DECODE;
+            return 1;
+        }
         for (i = 0u; i < frame.decoded_length; i++) v3_decode_buffer[i] = v3_wire_buffer[i];
         decoded = frame.decoded_length;
     }
-    if (pmos_crc32(v3_decode_buffer, decoded) != frame.decoded_crc32) return 1;
-    if (!frame_slot_mark(frame.offset, frame_size, retry)) return -1;
+    if (pmos_crc32(v3_decode_buffer, decoded) != frame.decoded_crc32) {
+        v3_last_frame_error = V3_FRAME_ERROR_DECODED_CRC;
+        return 1;
+    }
+    if (!frame_slot_mark(frame.offset, frame_size, retry)) {
+        v3_last_frame_error = V3_FRAME_ERROR_SLOT;
+        return -1;
+    }
     for (i = 0u; i < decoded; i++) destination[frame.offset + i] = v3_decode_buffer[i];
+    v3_last_frame_error = V3_FRAME_ERROR_NONE;
     return 0;
 }
+
 
 static int receive_v3_object(u8 *destination, u32 destination_size, u32 object_id,
                              u32 frame_count, u32 frame_size, u32 window_size,
@@ -1502,12 +1589,15 @@ static int receive_v3_object(u8 *destination, u32 destination_size, u32 object_i
                              u32 verify_sha)
 {
     u32 i, base, count, retry_bitmap, bit, result, retry_round;
-    u32 crc;
+    u32 crc, ack_status;
     struct pmos_timer transfer_timer;
     u8 digest[32];
     pmos_sha256_ctx sha;
     if (frame_count == 0u || frame_size < 1024u || frame_size > MAX_CHUNK ||
         window_size == 0u || window_size > MAX_WINDOW) return -1;
+    v3_last_frame_error = V3_FRAME_ERROR_NONE;
+    v3_last_expected_sequence = 0u;
+    uart_error_flags = 0u;
     for (i = 0u; i < destination_size; i++) destination[i] = fill_ff ? 0xffu : 0u;
     clear_received_map();
     timer_start(&transfer_timer);
@@ -1522,32 +1612,42 @@ static int receive_v3_object(u8 *destination, u32 destination_size, u32 object_i
         retry_bitmap = 0u;
         for (i = 0u; i < count; i++) {
             result = (u32)receive_v3_frame(destination, destination_size, object_id,
-                                           base + i, frame_size, 0u);
+                                           base + i, frame_size, 0u, window_size == 1u);
             if (result == (u32)-1) return -1;
             if (result != 0u) retry_bitmap |= 1u << i;
         }
-        if (send_ack_record(object_id, base, count, retry_bitmap, 0u) != 0) return -1;
+        ack_status = uart_error_flags;
+        uart_error_flags = 0u;
+        if (send_ack_record(object_id, base, count, retry_bitmap, ack_status) != 0) return -1;
         retry_round = 0u;
         while (retry_bitmap != 0u) {
             if (++retry_round > 8u) return -1;
             for (bit = 0u; bit < count; bit++) {
                 if ((retry_bitmap & (1u << bit)) == 0u) continue;
                 result = (u32)receive_v3_frame(destination, destination_size, object_id,
-                                               base + bit, frame_size, 1u);
+                                               base + bit, frame_size, 1u, window_size == 1u);
                 if (result == (u32)-1) return -1;
                 if (result == 0u) retry_bitmap &= ~(1u << bit);
             }
-            if (send_ack_record(object_id, base, count, retry_bitmap, retry_round) != 0) return -1;
+            ack_status = uart_error_flags | (retry_round << 16);
+            uart_error_flags = 0u;
+            if (send_ack_record(object_id, base, count, retry_bitmap, ack_status) != 0) return -1;
         }
         base += count;
     }
     crc = pmos_crc32(destination, destination_size);
-    if (crc != expected_crc) return -1;
+    if (crc != expected_crc) {
+        v3_last_frame_error = V3_FRAME_ERROR_OBJECT_CRC;
+        return -1;
+    }
     if (verify_sha) {
         pmos_sha256_init(&sha);
         pmos_sha256_update(&sha, destination, destination_size);
         pmos_sha256_final(&sha, digest);
-        if (!pmos_digest_equal(digest, expected_sha, 32u)) return -1;
+        if (!pmos_digest_equal(digest, expected_sha, 32u)) {
+            v3_last_frame_error = V3_FRAME_ERROR_OBJECT_SHA;
+            return -1;
+        }
     }
     return 0;
 }
@@ -1666,7 +1766,7 @@ fallback:
 
 static int handle_feature_test(char **tokens, u32 count)
 {
-    u32 mode, frame_size, window_size, frame_count, size, crc;
+    u32 mode, frame_size, window_size, frame_count, size, crc, dropped;
     if (count != 8u || !parse_u32_token(tokens[2], &mode) ||
         !parse_u32_token(tokens[3], &frame_size) || !parse_u32_token(tokens[4], &window_size) ||
         !parse_u32_token(tokens[5], &frame_count) || !parse_u32_token(tokens[6], &size) ||
@@ -1676,7 +1776,14 @@ static int handle_feature_test(char **tokens, u32 count)
     puts_b(" WINDOW="); put_u32_dec(window_size); puts_b("\n");
     if (receive_v3_object(TEST_BASE, size, OBJECT_TEST, frame_count, frame_size,
                           window_size, 1u, crc, (const u8 *)0, 0u) != 0) {
-        puts_b("PMOS3 FEATURE-FAIL MODE="); put_u32_dec(mode); puts_b("\n");
+        uart_pushback_valid = 0u;
+        dropped = uart_drain_until_idle(FEATURE_DRAIN_IDLE_MS, FEATURE_DRAIN_MAX_MS);
+        puts_b("PMOS3 FEATURE-FAIL MODE="); put_u32_dec(mode);
+        puts_b(" FRAME-ERROR="); put_u32_dec(v3_last_frame_error);
+        puts_b(" EXPECTED-SEQ="); put_u32_dec(v3_last_expected_sequence);
+        puts_b(" UARTERR="); hex32(uart_error_flags);
+        puts_b(" DRAINED="); put_u32_dec(dropped); puts_b("\n");
+        uart_error_flags = 0u;
         return 1;
     }
     puts_b("PMOS3 FEATURE-PASS MODE="); put_u32_dec(mode); puts_b("\n");
@@ -1842,6 +1949,9 @@ static void run_package_v3(const struct spi_device *device, const u8 id[3])
     if (receive_v3_object(MANIFEST_BASE, header.manifest_size, OBJECT_MANIFEST,
                           header.manifest_frame_count, header.frame_size, header.window_size,
                           0u, header.manifest_crc32, header.manifest_sha256, 1u) != 0) {
+        puts_b("PMOSREC FRAME-ERROR OBJECT=MANIFEST CODE="); put_u32_dec(v3_last_frame_error);
+        puts_b(" EXPECTED-SEQ="); put_u32_dec(v3_last_expected_sequence);
+        puts_b(" UARTERR="); hex32(uart_error_flags); puts_b("\n");
         puts_b("PMOSREC RESULT ERROR MANIFEST-TRANSFER\n"); return;
     }
     puts_b("PMOS3 MANIFEST-OBJECT-VERIFIED\n");
@@ -1852,6 +1962,9 @@ static void run_package_v3(const struct spi_device *device, const u8 id[3])
     if (receive_v3_object(STAGING_BASE, header.image_size, OBJECT_IMAGE,
                           header.image_frame_count, header.frame_size, header.window_size,
                           1u, header.image_crc32, header.image_sha256, 1u) != 0) {
+        puts_b("PMOSREC FRAME-ERROR OBJECT=IMAGE CODE="); put_u32_dec(v3_last_frame_error);
+        puts_b(" EXPECTED-SEQ="); put_u32_dec(v3_last_expected_sequence);
+        puts_b(" UARTERR="); hex32(uart_error_flags); puts_b("\n");
         puts_b("PMOSREC RESULT ERROR IMAGE-TRANSFER\n"); return;
     }
     puts_b("PMOS3 IMAGE-OBJECT-VERIFIED\n");

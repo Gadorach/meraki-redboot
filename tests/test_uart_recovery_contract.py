@@ -183,7 +183,7 @@ class UartRecoveryContractTests(unittest.TestCase):
             "spi_verify_full", "spi_read_id", "spi_wait_ready", "FLASH-PROTECTED",
             "spi_check_completion", "FLASH-FLAG-", "accepted_jedec_ids",
             "PACKAGE_HEADER_TIMEOUT_MS", "OBJECT_TRANSFER_TIMEOUT_MS",
-            "V3_FRAME_TIMEOUT_MS 30000u", "CONFIRM_TIMEOUT_MS", "struct pmos_timer",
+            "V3_FRAME_TIMEOUT_MS 5000u", "CONFIRM_TIMEOUT_MS", "struct pmos_timer",
             "PMOSREC COMMAND-READY 3", "PMOSPFT HEADER-ACK", "spi_scratch_preflight",
             "SPI-GENERAL", "FLASH-PREFLIGHT-OK", "PREFLIGHT-RESTORE-FAILED",
             "PREFLIGHT-BOOTLOADER-CHANGED", "BOOTLOADER-UNCHANGED",
@@ -253,6 +253,16 @@ class UartRecoveryContractTests(unittest.TestCase):
         self.assertIn("pmos_crc32(raw, 24u)", RECOVERY_SOURCE)
         self.assertIn("retry_bitmap", RECOVERY_SOURCE)
         self.assertIn("frame_slot_mark", RECOVERY_SOURCE)
+
+
+    def test_feature_transport_uses_safe_single_frame_recovery_and_stream_drain(self) -> None:
+        self.assertIn("FEATURE_DRAIN_IDLE_MS", RECOVERY_SOURCE)
+        self.assertIn("uart_drain_until_idle", RECOVERY_SOURCE)
+        self.assertIn("window_size == 1u", RECOVERY_SOURCE)
+        self.assertIn("v3_recover_single_frame_boundary", RECOVERY_SOURCE)
+        self.assertIn("FRAME-ERROR=", RECOVERY_SOURCE)
+        self.assertIn("DRAINED=", RECOVERY_SOURCE)
+        self.assertIn("ack_status = uart_error_flags", RECOVERY_SOURCE)
 
     def test_recovery_object_deadline_is_enforced(self) -> None:
         self.assertIn("timer_start(&transfer_timer)", RECOVERY_SOURCE)

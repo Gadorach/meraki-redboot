@@ -1,5 +1,18 @@
 # Release record
 
+## 0.7.0 post-release UART receive-window correction
+
+- Keep compact ACKs and deterministic target-to-host test streams byte-transparent.
+- Add single-frame boundary recovery for malformed headers and payload timeouts,
+  with the target frame timeout bounded below the host ACK deadline.
+- Drain failed feature-test bursts before returning to the command parser,
+  preventing queued binary frame data from producing `UNKNOWN-COMMAND` floods.
+- Report structured frame error code, expected sequence, UART status and drained
+  byte count, and expose UART status in compact ACK records.
+- Retain protocol support for windows up to 16; production host policy uses
+  window 1 while paced larger-window testing remains diagnostic-only.
+
+
 ## 0.7.0 post-release recovery manifest parser correction
 
 - Scoped minimal JSON key lookup to direct members of the object being validated.

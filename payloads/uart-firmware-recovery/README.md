@@ -40,7 +40,7 @@ rate list, while engineering tools may still perform refinement scans.
 Preferred transfer parameters are:
 
 - 4096-byte decoded frames, with 1024-byte fallback;
-- windows of 16, 8, 4 or 1 frames;
+- a one-frame production window, with paced 2/4/8/16-frame diagnostic support;
 - binary cumulative ACK/NAK records;
 - selective retry bitmap;
 - CRC-32 for frame headers, wire bytes, decoded bytes and ACK records.
