@@ -27,12 +27,15 @@ passed RAM-loader CRC-32 and SHA-256 validation and entered at `0x81000000`.
 PMOSREC reports `PMOSREC READY 3` and a `PMOSRECOVERY3` descriptor. The host
 proposes UART rates and the target returns the nearest rate its current UART
 clock and divisor can generate. Every candidate is qualified in both directions
-with deterministic pseudorandom streams and known CRC-32 values.
+with deterministic pseudorandom streams and known CRC-32 values. Binary ACKs and
+target-to-host test streams use a byte-transparent UART writer; CRLF conversion
+is restricted to human-readable console lines.
 
 Both sides independently retain the previous known-good rate. A failed
 candidate causes the target to restore its previous divisor and emit fallback
-beacons. The host restores the same rate independently. Rate refinement stops
-when the gap to the nearest failure is no more than two percent.
+beacons. The host restores the same rate independently. The target keeps support
+for arbitrary host proposals; normal host policy may use a short conventional
+rate list, while engineering tools may still perform refinement scans.
 
 Preferred transfer parameters are:
 

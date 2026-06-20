@@ -225,6 +225,16 @@ Development records and prior release notes are maintained under:
 - Added an early `SPI-CS-CONTRACT ACTIVE-MASK` diagnostic before JEDEC probing.
 
 
+## Unreleased — PMOSREC binary UART transparency
+
+- Split human-readable CRLF output from byte-transparent UART transmission.
+- Send compact ACK records and deterministic target-to-host qualification data
+  without rewriting binary `0x0a` bytes.
+- Correct baud error diagnostics so ordinary divisor error no longer saturates
+  to `4294967295` because of 32-bit multiplication overflow.
+- Added contract tests that prevent binary protocol paths from using the text
+  output helper.
+
 ## Unreleased — PMOSREC v3 adaptive UART recovery
 
 - Kept the boot menu and PMOSRAM2 executable upload at the stable 115200 baud.

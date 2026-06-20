@@ -273,11 +273,16 @@ static int recv_exact(u8 *destination, u32 length, u32 milliseconds)
     return 1;
 }
 
+static void uart_put_raw(u8 value)
+{
+    while ((uart[UART_LSR / 4] & UART_LSR_THRE) == 0u) {}
+    uart[0] = (u32)value;
+}
+
 static void putc_b(char c)
 {
-    if (c == '\n') putc_b('\r');
-    while ((uart[UART_LSR / 4] & UART_LSR_THRE) == 0u) {}
-    uart[0] = (u32)(u8)c;
+    if (c == '\n') uart_put_raw((u8)'\r');
+    uart_put_raw((u8)c);
 }
 
 static void puts_b(const char *text)
@@ -1340,7 +1345,7 @@ static int send_ack_record(u32 object_id, u32 base, u32 count,
     put_u32_le(raw + 20u, status);
     put_u32_le(raw + 24u, pmos_crc32(raw, 24u));
     for (attempt = 0u; attempt < ACK_CONFIRM_RETRIES; attempt++) {
-        for (i = 0u; i < sizeof(raw); i++) putc_b((char)raw[i]);
+        for (i = 0u; i < sizeof(raw); i++) uart_put_raw(raw[i]);
         if (recv_exact(&confirmation, 1u, ACK_CONFIRM_TIMEOUT_MS)) {
             if (confirmation == ACK_CONFIRM_BYTE) return 0;
             /* If the one-byte confirmation was lost but the host already
@@ -1555,8 +1560,17 @@ static int handle_baud_offer(char **tokens, u32 count, u32 clock_hz, u32 current
     divisor = uart_nearest_divisor(clock_hz, requested);
     actual = uart_actual_rate(clock_hz, divisor);
     difference = actual > requested ? actual - requested : requested - actual;
-    error_ppm = (difference > 0xffffffffu / 1000000u) ? 0xffffffffu :
-                (difference * 1000000u) / requested;
+    /* Preserve the ratio while scaling into a range where multiplying by one
+     * million cannot overflow a 32-bit freestanding build. */
+    {
+        u32 scaled_difference = difference;
+        u32 scaled_requested = requested;
+        while (scaled_difference > 0xffffffffu / 1000000u && scaled_requested > 1u) {
+            scaled_difference = scaled_difference / 2u + scaled_difference % 2u;
+            scaled_requested = scaled_requested / 2u + scaled_requested % 2u;
+        }
+        error_ppm = (scaled_difference * 1000000u) / scaled_requested;
+    }
     puts_b("PMOS3 BAUD-CANDIDATE REQUESTED="); put_u32_dec(requested);
     puts_b(" ACTUAL="); put_u32_dec(actual); puts_b(" DIV="); put_u32_dec(divisor);
     puts_b(" ERROR_PPM="); put_u32_dec(error_ppm); puts_b(" CURRENT="); put_u32_dec(current_rate);
@@ -1617,7 +1631,7 @@ static int run_baud_test(char **tokens, u32 count, u32 clock_hz, u32 *current_di
         t2h_crc = deterministic_crc(t2h_seed, length);
         puts_b("PMOS3 BAUD-T2H PASS="); put_u32_dec(pass); puts_b(" SEED="); hex32(t2h_seed);
         puts_b(" BYTES="); put_u32_dec(length); puts_b(" CRC="); hex32(t2h_crc); puts_b(" NONCE="); hex32(nonce); puts_b("\n");
-        for (i = 0u; i < length; i++) putc_b((char)prng_byte(&t2h_seed));
+        for (i = 0u; i < length; i++) uart_put_raw(prng_byte(&t2h_seed));
         if (!recv_line_timeout(line, sizeof(line), BAUD_TEST_TIMEOUT_MS)) goto fallback;
         part_count = split_tokens(line, parts, 10u);
         if (part_count != 5u || !text_equal(parts[0], "PMOS3") ||

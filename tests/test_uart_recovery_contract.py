@@ -227,6 +227,19 @@ class UartRecoveryContractTests(unittest.TestCase):
         self.assertIn("WATCHDOG_ENABLE_BIT | WATCHDOG_LOCK_FAST", source)
         self.assertIn("PMOSREC REBOOT FALLBACK-WATCHDOG", source)
 
+    def test_binary_uart_paths_are_byte_transparent(self) -> None:
+        self.assertIn("static void uart_put_raw(u8 value)", RECOVERY_SOURCE)
+        self.assertIn("uart_put_raw(raw[i])", RECOVERY_SOURCE)
+        self.assertIn("uart_put_raw(prng_byte(&t2h_seed))", RECOVERY_SOURCE)
+        self.assertNotIn("putc_b((char)raw[i])", RECOVERY_SOURCE)
+        self.assertNotIn("putc_b((char)prng_byte(&t2h_seed))", RECOVERY_SOURCE)
+        self.assertIn("if (c == '\\n') uart_put_raw((u8)'\\r')", RECOVERY_SOURCE)
+
+    def test_baud_error_ppm_avoids_saturation_overflow(self) -> None:
+        self.assertIn("scaled_difference", RECOVERY_SOURCE)
+        self.assertIn("scaled_requested", RECOVERY_SOURCE)
+        self.assertNotIn("? 0xffffffffu :", RECOVERY_SOURCE)
+
     def test_window_acknowledgements_are_recoverable_and_crc_protected(self) -> None:
         # RAM loader retains exact duplicate-frame semantics. PMOSREC v3 instead
         # keeps each target ACK pending until the host confirms it, so a damaged
