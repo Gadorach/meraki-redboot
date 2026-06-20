@@ -206,3 +206,12 @@ Development records and prior release notes are maintained under:
 - Increased the initial PMOSPKG package-header receive grace period to 30 seconds.
 - Kept per-frame interbyte timeout behavior unchanged.
 - Documented that hosts must wait for the complete `PMOSREC DESCRIPTOR` line before sending binary data, preventing RX FIFO overrun while the polling recovery stage is still transmitting startup text.
+
+## Unreleased — SPI NOR hardware preflight
+
+- Preserve Jaguar1 `GENERAL_CTRL` and assert `IF_MASTER_SPI_ENA` before software SPI access.
+- Detect all-high/all-low flash buses before any firmware package transfer.
+- Add JEDEC, SFDP, status, protection, and error-latch preflight diagnostics.
+- Add the `PMOSPFT1` destructive-but-restored 64 KiB scratch-sector test.
+- Hard-protect the 256 KiB bootloader region and verify its before/after CRC-32 is unchanged.
+- Publish `spi-nor-scratch-rw-restore-loader-crc-v2` and `preserve-general-ctrl-enable-spi-v1` capability contracts.

@@ -26,10 +26,17 @@ typedef pmos_u32 u32;
 #define MAX_CHUNK 4096u
 #define PACKAGE_PROTOCOL_VERSION 2u
 #define PACKAGE_HEADER_BYTES 124u
+#define PREFLIGHT_HEADER_BYTES 32u
 #define FRAME_HEADER_BYTES 20u
 #define PKG_MAGIC0 0x534f4d50u /* PMOS */
 #define PKG_MAGIC1 0x32474b50u /* PKG2 */
 #define FRAME_MAGIC 0x32464b50u /* PKF2 */
+#define PREFLIGHT_MAGIC0 0x534f4d50u /* PMOS */
+#define PREFLIGHT_MAGIC1 0x31544650u /* PFT1 */
+#define PREFLIGHT_PROTOCOL_VERSION 1u
+#define PREFLIGHT_FLAG_RESTORE 0x00000001u
+#define PREFLIGHT_KNOWN_FLAGS PREFLIGHT_FLAG_RESTORE
+#define DEFAULT_PREFLIGHT_SCRATCH 0x00ff0000u
 #define OBJECT_IMAGE 1u
 #define OBJECT_MANIFEST 2u
 #define FLAG_FULL_FLASH 0x00000001u
@@ -44,6 +51,7 @@ typedef pmos_u32 u32;
 #define SPI_STATUS_WIP 0x01u
 #define SPI_STATUS_WEL 0x02u
 #define SPI_STATUS_BP_MASK 0x3cu
+#define SPI_SFDP_BYTES 8u
 
 #ifndef RECOVERY_SOC_FAMILY
 #error RECOVERY_SOC_FAMILY must be 1 for Luton26 or 2 for Jaguar1
@@ -52,11 +60,15 @@ typedef pmos_u32 u32;
 #if RECOVERY_SOC_FAMILY == 1
 #define RECOVERY_SOC_NAME "luton26"
 #define SPI_SW_MODE_ADDR 0x70000064u
-#define RECOVERY_DESCRIPTOR "PMOSRECOVERY2;SOC=luton26;FAMILY=1;SPI=70000064;PROTO=2;END"
+#define SPI_GENERAL_CTRL_ADDR 0x70000024u
+#define SPI_GENERAL_CTRL_ENABLE_MASK 0u
+#define RECOVERY_DESCRIPTOR "PMOSRECOVERY2;SOC=luton26;FAMILY=1;SPI=70000064;PROTO=2;PREFLIGHT=2;END"
 #elif RECOVERY_SOC_FAMILY == 2
 #define RECOVERY_SOC_NAME "jaguar1"
 #define SPI_SW_MODE_ADDR 0x70000068u
-#define RECOVERY_DESCRIPTOR "PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;END"
+#define SPI_GENERAL_CTRL_ADDR 0x70000028u
+#define SPI_GENERAL_CTRL_ENABLE_MASK (1u << 2)
+#define RECOVERY_DESCRIPTOR "PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=2;END"
 #else
 #error unsupported RECOVERY_SOC_FAMILY
 #endif
@@ -98,6 +110,17 @@ struct frame_header {
     u32 crc32;
 };
 
+struct preflight_header {
+    u32 magic0;
+    u32 magic1;
+    u32 version;
+    u32 flags;
+    u32 scratch_address;
+    u32 scratch_size;
+    u32 pattern_seed;
+    u32 header_crc32;
+};
+
 struct pmos_timer {
     u32 last_count;
     u32 remainder_ticks;
@@ -130,6 +153,8 @@ static const struct spi_device supported_devices[] = {
 
 static volatile u32 * const uart = (volatile u32 *)UART_BASE;
 static volatile u32 * const spi_sw = (volatile u32 *)SPI_SW_MODE_ADDR;
+static volatile u32 * const spi_general_ctrl = (volatile u32 *)SPI_GENERAL_CTRL_ADDR;
+static u8 preflight_page[256];
 
 static u32 cp0_count(void)
 {
@@ -289,6 +314,18 @@ static void parse_frame_header(struct frame_header *frame, const u8 *raw)
     frame->sequence = le32(raw + 8);
     frame->length = le32(raw + 12);
     frame->crc32 = le32(raw + 16);
+}
+
+static void parse_preflight_header(struct preflight_header *header, const u8 *raw)
+{
+    header->magic0 = le32(raw);
+    header->magic1 = le32(raw + 4);
+    header->version = le32(raw + 8);
+    header->flags = le32(raw + 12);
+    header->scratch_address = le32(raw + 16);
+    header->scratch_size = le32(raw + 20);
+    header->pattern_seed = le32(raw + 24);
+    header->header_crc32 = le32(raw + 28);
 }
 
 static void send_frame_status(const char *status, u32 object_id, u32 sequence)
@@ -703,6 +740,23 @@ static int validate_flash_manifest(const struct package_header *header,
     return 0;
 }
 
+static int spi_controller_prepare(void)
+{
+    u32 before = *spi_general_ctrl;
+    u32 requested = before | SPI_GENERAL_CTRL_ENABLE_MASK;
+    u32 observed;
+    if (requested != before) *spi_general_ctrl = requested;
+    __asm__ __volatile__("sync" ::: "memory");
+    observed = *spi_general_ctrl;
+    puts_b("PMOSREC SPI-GENERAL BEFORE="); hex32(before);
+    puts_b(" REQUESTED="); hex32(requested); puts_b(" OBSERVED="); hex32(observed); puts_b("\n");
+    if ((observed & SPI_GENERAL_CTRL_ENABLE_MASK) != SPI_GENERAL_CTRL_ENABLE_MASK) {
+        puts_b("PMOSREC RESULT ERROR SPI-MASTER-ENABLE\n");
+        return -1;
+    }
+    return 0;
+}
+
 static void spi_delay(void)
 {
     u32 start = cp0_count();
@@ -836,17 +890,224 @@ static u8 spi_read_byte(u32 address)
     return value;
 }
 
+static void spi_read_block(u32 address, u8 *destination, u32 length)
+{
+    u32 offset;
+    spi_select(); spi_xfer(0x03u);
+    spi_xfer((u8)(address >> 16)); spi_xfer((u8)(address >> 8)); spi_xfer((u8)address);
+    for (offset = 0u; offset < length; offset++) destination[offset] = spi_xfer(0xffu);
+    spi_deselect();
+}
+
+static u32 spi_crc_range(u32 address, u32 length)
+{
+    u32 crc = 0xffffffffu;
+    u32 offset;
+    u8 value;
+    spi_select(); spi_xfer(0x03u);
+    spi_xfer((u8)(address >> 16)); spi_xfer((u8)(address >> 8)); spi_xfer((u8)address);
+    for (offset = 0u; offset < length; offset++) {
+        value = spi_xfer(0xffu);
+        crc = pmos_crc32_update(crc, &value, 1u);
+    }
+    spi_deselect();
+    return ~crc;
+}
+
+static void spi_read_sfdp(u8 data[SPI_SFDP_BYTES])
+{
+    u32 i;
+    spi_select(); spi_xfer(0x5au);
+    spi_xfer(0u); spi_xfer(0u); spi_xfer(0u); spi_xfer(0xffu);
+    for (i = 0u; i < SPI_SFDP_BYTES; i++) data[i] = spi_xfer(0xffu);
+    spi_deselect();
+}
+
+static int spi_erase_block(const struct spi_device *device, u32 address)
+{
+    if (spi_write_enable() != 0) return -1;
+    spi_select(); spi_xfer(device->erase_opcode);
+    spi_xfer((u8)(address >> 16)); spi_xfer((u8)(address >> 8)); spi_xfer((u8)address);
+    spi_deselect();
+    if (spi_wait_ready(device->erase_timeout_ms) != 0) return -1;
+    return spi_check_completion(device, address, "PREFLIGHT-ERASE");
+}
+
+static int spi_program_page(const struct spi_device *device, u32 address, const u8 *data)
+{
+    u32 offset;
+    if (spi_write_enable() != 0) return -1;
+    spi_select(); spi_xfer(0x02u);
+    spi_xfer((u8)(address >> 16)); spi_xfer((u8)(address >> 8)); spi_xfer((u8)address);
+    for (offset = 0u; offset < device->page_size; offset++) spi_xfer(data[offset]);
+    spi_deselect();
+    if (spi_wait_ready(device->program_timeout_ms) != 0) return -1;
+    return spi_check_completion(device, address, "PREFLIGHT-PROGRAM");
+}
+
+static u8 preflight_pattern_byte(u32 offset, u32 seed)
+{
+    u32 value = seed ^ (offset * 0x45d9f3bu) ^ (offset << 16) ^ (offset >> 3);
+    value ^= value << 13; value ^= value >> 17; value ^= value << 5;
+    return (u8)(value ^ (value >> 8) ^ (value >> 16) ^ (value >> 24));
+}
+
+static int spi_verify_erased(u32 address, u32 length)
+{
+    u32 offset;
+    spi_select(); spi_xfer(0x03u);
+    spi_xfer((u8)(address >> 16)); spi_xfer((u8)(address >> 8)); spi_xfer((u8)address);
+    for (offset = 0u; offset < length; offset++) {
+        if (spi_xfer(0xffu) != 0xffu) { spi_deselect(); return -1; }
+    }
+    spi_deselect();
+    return 0;
+}
+
+static int spi_verify_buffer(u32 address, const u8 *expected, u32 length)
+{
+    u32 offset;
+    spi_select(); spi_xfer(0x03u);
+    spi_xfer((u8)(address >> 16)); spi_xfer((u8)(address >> 8)); spi_xfer((u8)address);
+    for (offset = 0u; offset < length; offset++) {
+        if (spi_xfer(0xffu) != expected[offset]) { spi_deselect(); return -1; }
+    }
+    spi_deselect();
+    return 0;
+}
+
+static int spi_verify_pattern(u32 address, u32 length, u32 seed)
+{
+    u32 offset;
+    spi_select(); spi_xfer(0x03u);
+    spi_xfer((u8)(address >> 16)); spi_xfer((u8)(address >> 8)); spi_xfer((u8)address);
+    for (offset = 0u; offset < length; offset++) {
+        if (spi_xfer(0xffu) != preflight_pattern_byte(offset, seed)) {
+            spi_deselect(); return -1;
+        }
+    }
+    spi_deselect();
+    return 0;
+}
+
+static int spi_program_buffer(const struct spi_device *device, u32 address,
+                              const u8 *data, u32 length)
+{
+    u32 offset;
+    for (offset = 0u; offset < length; offset += device->page_size) {
+        if (spi_program_page(device, address + offset, data + offset) != 0) return -1;
+    }
+    return 0;
+}
+
+static int spi_program_pattern(const struct spi_device *device, u32 address,
+                               u32 length, u32 seed)
+{
+    u32 page, offset;
+    for (page = 0u; page < length; page += device->page_size) {
+        for (offset = 0u; offset < device->page_size; offset++)
+            preflight_page[offset] = preflight_pattern_byte(page + offset, seed);
+        if (spi_program_page(device, address + page, preflight_page) != 0) return -1;
+    }
+    return 0;
+}
+
+static int spi_scratch_preflight(const struct spi_device *device,
+                                 const struct preflight_header *request)
+{
+    u8 *backup = STAGING_BASE;
+    u32 original_crc;
+    u32 loader_crc_before;
+    u32 loader_crc_after;
+    int test_ok = 1;
+    int restore_ok = 1;
+
+    if (request->version != PREFLIGHT_PROTOCOL_VERSION ||
+        (request->flags & ~PREFLIGHT_KNOWN_FLAGS) != 0u ||
+        (request->flags & PREFLIGHT_FLAG_RESTORE) == 0u ||
+        request->scratch_size != device->erase_size ||
+        request->scratch_address < LOADER_REGION_SIZE ||
+        request->scratch_address > device->bytes - device->erase_size ||
+        (request->scratch_address & (device->erase_size - 1u)) != 0u) {
+        puts_b("PMOSREC RESULT ERROR PREFLIGHT-REQUEST\n"); return -1;
+    }
+
+    puts_b("PMOSPFT BEGIN ADDRESS="); hex32(request->scratch_address);
+    puts_b(" BYTES="); hex32(request->scratch_size); puts_b(" SEED=");
+    hex32(request->pattern_seed); puts_b("\n");
+    loader_crc_before = spi_crc_range(0u, LOADER_REGION_SIZE);
+    puts_b("PMOSPFT BOOTLOADER-CRC BEFORE="); hex32(loader_crc_before); puts_b("\n");
+    spi_read_block(request->scratch_address, backup, request->scratch_size);
+    original_crc = pmos_crc32(backup, request->scratch_size);
+    puts_b("PMOSPFT BACKUP CRC32="); hex32(original_crc); puts_b("\n");
+
+    if (spi_erase_block(device, request->scratch_address) != 0 ||
+        spi_verify_erased(request->scratch_address, request->scratch_size) != 0) {
+        puts_b("PMOSPFT FAIL TEST-ERASE\n"); test_ok = 0;
+    } else {
+        puts_b("PMOSPFT PASS TEST-ERASE\n");
+    }
+    if (test_ok && spi_program_pattern(device, request->scratch_address,
+                                       request->scratch_size, request->pattern_seed) != 0) {
+        puts_b("PMOSPFT FAIL TEST-PROGRAM\n"); test_ok = 0;
+    }
+    if (test_ok && spi_verify_pattern(request->scratch_address, request->scratch_size,
+                                      request->pattern_seed) != 0) {
+        puts_b("PMOSPFT FAIL TEST-READBACK\n"); test_ok = 0;
+    } else if (test_ok) {
+        puts_b("PMOSPFT PASS TEST-PROGRAM-READBACK\n");
+    }
+
+    puts_b("PMOSPFT RESTORE-BEGIN\n");
+    if (spi_erase_block(device, request->scratch_address) != 0 ||
+        spi_verify_erased(request->scratch_address, request->scratch_size) != 0 ||
+        spi_program_buffer(device, request->scratch_address, backup, request->scratch_size) != 0 ||
+        spi_verify_buffer(request->scratch_address, backup, request->scratch_size) != 0) {
+        restore_ok = 0;
+    }
+    if (!restore_ok) {
+        puts_b("PMOSREC RESULT ERROR PREFLIGHT-RESTORE-FAILED SCRATCH=");
+        hex32(request->scratch_address); puts_b("\n"); return -1;
+    }
+    puts_b("PMOSPFT PASS RESTORE CRC32="); hex32(original_crc); puts_b("\n");
+    loader_crc_after = spi_crc_range(0u, LOADER_REGION_SIZE);
+    if (loader_crc_after != loader_crc_before) {
+        puts_b("PMOSREC RESULT ERROR PREFLIGHT-BOOTLOADER-CHANGED BEFORE=");
+        hex32(loader_crc_before); puts_b(" AFTER="); hex32(loader_crc_after); puts_b("\n");
+        return -1;
+    }
+    puts_b("PMOSPFT PASS BOOTLOADER-UNCHANGED CRC32="); hex32(loader_crc_after); puts_b("\n");
+    if (!test_ok) {
+        puts_b("PMOSREC RESULT ERROR PREFLIGHT-RW-FAILED RESTORE=OK\n"); return -1;
+    }
+    puts_b("PMOSREC RESULT PREFLIGHT-OK SCRATCH="); hex32(request->scratch_address);
+    puts_b(" BYTES="); hex32(request->scratch_size); puts_b("\n");
+    return 0;
+}
+
 static int spi_preflight(const struct spi_device **device_out, u8 id[3])
 {
     u8 status;
     const struct spi_device *device;
+    u8 sfdp[SPI_SFDP_BYTES];
     spi_deselect();
     spi_read_id(id);
     puts_b("PMOSREC FLASH-ID "); hex8(id[0]); hex8(id[1]); hex8(id[2]); puts_b("\n");
+    if ((id[0] == 0xffu && id[1] == 0xffu && id[2] == 0xffu) ||
+        (id[0] == 0u && id[1] == 0u && id[2] == 0u)) {
+        puts_b("PMOSREC RESULT ERROR FLASH-NO-RESPONSE\n"); return -1;
+    }
     device = find_spi_device(id);
     if (!device || device->bytes != FULL_IMAGE_SIZE) {
         puts_b("PMOSREC RESULT ERROR UNSUPPORTED-JEDEC\n"); return -1;
     }
+    spi_read_sfdp(sfdp);
+    puts_b("PMOSREC SFDP ");
+    hex8(sfdp[0]); hex8(sfdp[1]); hex8(sfdp[2]); hex8(sfdp[3]);
+    if (sfdp[0] == 0x53u && sfdp[1] == 0x46u && sfdp[2] == 0x44u && sfdp[3] == 0x50u)
+        puts_b(" STATUS=PASS\n");
+    else
+        puts_b(" STATUS=UNAVAILABLE\n");
     status = spi_read_status();
     if ((status & SPI_STATUS_WIP) != 0u && spi_wait_ready(device->erase_timeout_ms) != 0) {
         puts_b("PMOSREC RESULT ERROR FLASH-BUSY-TIMEOUT\n"); return -1;
@@ -978,18 +1239,50 @@ static void halt(void)
 
 void recovery_main(void)
 {
+    u8 prefix[8];
     u8 raw[PACKAGE_HEADER_BYTES];
+    u8 preflight_raw[PREFLIGHT_HEADER_BYTES];
     u8 id[3];
     struct package_header header;
+    struct preflight_header preflight;
     const struct spi_device *device = (const struct spi_device *)0;
     u32 nonce;
+    u32 i;
 
     puts_b("PMOSREC READY 2 SOC=" RECOVERY_SOC_NAME " FAMILY=");
     hex32(RECOVERY_SOC_FAMILY); puts_b(" SPI="); hex32(SPI_SW_MODE_ADDR);
     puts_b(" MAX_MANIFEST="); hex32(MAX_MANIFEST); puts_b("\n");
     puts_b("PMOSREC DESCRIPTOR "); puts_b(recovery_descriptor); puts_b("\n");
 
-    if (!recv_exact(raw, PACKAGE_HEADER_BYTES, PACKAGE_HEADER_TIMEOUT_MS)) {
+    if (spi_controller_prepare() != 0 || spi_preflight(&device, id) != 0) halt();
+    puts_b("PMOSREC FLASH-PREFLIGHT-OK ID="); hex8(id[0]); hex8(id[1]); hex8(id[2]);
+    puts_b(" ERASE="); hex32(device->erase_size); puts_b(" PAGE="); hex32(device->page_size); puts_b("\n");
+    puts_b("PMOSREC COMMAND-READY 1\n");
+
+    if (!recv_exact(prefix, sizeof(prefix), PACKAGE_HEADER_TIMEOUT_MS)) {
+        puts_b("PMOSREC RESULT ERROR COMMAND-HEADER-TIMEOUT\n"); halt();
+    }
+
+    if (le32(prefix) == PREFLIGHT_MAGIC0 && le32(prefix + 4) == PREFLIGHT_MAGIC1) {
+        for (i = 0u; i < 8u; i++) preflight_raw[i] = prefix[i];
+        if (!recv_exact(preflight_raw + 8u, PREFLIGHT_HEADER_BYTES - 8u,
+                        PACKAGE_HEADER_TIMEOUT_MS)) {
+            puts_b("PMOSREC RESULT ERROR PREFLIGHT-HEADER-TIMEOUT\n"); halt();
+        }
+        parse_preflight_header(&preflight, preflight_raw);
+        if (preflight.header_crc32 != pmos_crc32(preflight_raw, PREFLIGHT_HEADER_BYTES - 4u)) {
+            puts_b("PMOSREC RESULT ERROR PREFLIGHT-HEADER-CRC\n"); halt();
+        }
+        puts_b("PMOSPFT HEADER-ACK\n");
+        (void)spi_scratch_preflight(device, &preflight);
+        halt();
+    }
+
+    if (le32(prefix) != PKG_MAGIC0 || le32(prefix + 4) != PKG_MAGIC1) {
+        puts_b("PMOSREC RESULT ERROR UNKNOWN-COMMAND\n"); halt();
+    }
+    for (i = 0u; i < 8u; i++) raw[i] = prefix[i];
+    if (!recv_exact(raw + 8u, PACKAGE_HEADER_BYTES - 8u, PACKAGE_HEADER_TIMEOUT_MS)) {
         puts_b("PMOSREC RESULT ERROR PACKAGE-HEADER-TIMEOUT\n"); halt();
     }
     parse_package_header(&header, raw);
@@ -1004,7 +1297,6 @@ void recovery_main(void)
     if (receive_object(OBJECT_MANIFEST, MANIFEST_BASE, header.manifest_size, header.chunk_size,
                        header.manifest_crc32, header.manifest_sha256) != 0) halt();
     if (validate_manifest_and_image(&header) != 0) halt();
-    if (spi_preflight(&device, id) != 0) halt();
     if (validate_flash_manifest(&header, device, id) != 0) halt();
 
     puts_b("PMOSPKG VERIFIED MODEL="); puts_b(header.target_model); puts_b("\n");

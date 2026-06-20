@@ -182,7 +182,10 @@ class UartRecoveryContractTests(unittest.TestCase):
             "spi_verify_full", "spi_read_id", "spi_wait_ready", "FLASH-PROTECTED",
             "spi_check_completion", "FLASH-FLAG-", "accepted_jedec_ids",
             "PACKAGE_HEADER_TIMEOUT_MS", "OBJECT_TRANSFER_TIMEOUT_MS",
-            "CONFIRM_TIMEOUT_MS", "struct pmos_timer",
+            "CONFIRM_TIMEOUT_MS", "struct pmos_timer", "PMOSREC COMMAND-READY 1",
+            "PMOSPFT HEADER-ACK", "spi_scratch_preflight", "SPI-GENERAL",
+            "FLASH-PREFLIGHT-OK", "PREFLIGHT-RESTORE-FAILED",
+            "PREFLIGHT-BOOTLOADER-CHANGED", "BOOTLOADER-UNCHANGED",
             "image_sha256", "manifest_sha256", "target_family", "boot_chain",
             "uart_firmware", "flash_geometry", "accepted_models",
             "MANIFEST-RECOVERY-CAPABILITY", "MANIFEST-LOADER-DIGEST",
@@ -190,8 +193,19 @@ class UartRecoveryContractTests(unittest.TestCase):
             self.assertIn(token, RECOVERY_SOURCE)
         self.assertNotIn("current-artifact-validated", RECOVERY_SOURCE)
         self.assertNotIn("historically-validated", RECOVERY_SOURCE)
-        self.assertIn("recv_exact(raw, PACKAGE_HEADER_BYTES, PACKAGE_HEADER_TIMEOUT_MS)", RECOVERY_SOURCE)
+        self.assertIn("recv_exact(prefix, sizeof(prefix), PACKAGE_HEADER_TIMEOUT_MS)", RECOVERY_SOURCE)
+        self.assertIn("recv_exact(raw + 8u, PACKAGE_HEADER_BYTES - 8u, PACKAGE_HEADER_TIMEOUT_MS)", RECOVERY_SOURCE)
         self.assertNotIn("recv_exact(raw, PACKAGE_HEADER_BYTES, INTERBYTE_TIMEOUT_MS)", RECOVERY_SOURCE)
+
+    def test_recovery_preflight_preserves_bootloader_and_restores_scratch(self) -> None:
+        self.assertIn("request->scratch_address < LOADER_REGION_SIZE", RECOVERY_SOURCE)
+        self.assertIn("request->scratch_size != device->erase_size", RECOVERY_SOURCE)
+        self.assertIn("spi_read_block(request->scratch_address, backup", RECOVERY_SOURCE)
+        self.assertIn("spi_program_pattern", RECOVERY_SOURCE)
+        self.assertIn("spi_verify_pattern", RECOVERY_SOURCE)
+        self.assertIn("spi_program_buffer", RECOVERY_SOURCE)
+        self.assertIn("spi_verify_buffer", RECOVERY_SOURCE)
+        self.assertIn("PMOSREC RESULT PREFLIGHT-OK", RECOVERY_SOURCE)
 
 
     def test_duplicate_frames_are_exact_and_wrap_safe(self) -> None:

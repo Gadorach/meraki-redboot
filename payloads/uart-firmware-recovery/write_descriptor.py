@@ -24,7 +24,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     data = args.binary.read_bytes()
-    marker = f"PMOSRECOVERY2;SOC={args.family};FAMILY={args.family_id};SPI={args.spi_address:08x};PROTO=2;END".encode()
+    marker = f"PMOSRECOVERY2;SOC={args.family};FAMILY={args.family_id};SPI={args.spi_address:08x};PROTO=2;PREFLIGHT=2;END".encode()
     if marker not in data:
         raise SystemExit("compiled payload does not contain its machine-readable descriptor")
     descriptor = {
@@ -42,12 +42,20 @@ def main() -> int:
             "page_bytes": 256,
             "address_bytes": 3,
         },
-        "operations": ["verify", "dry-run", "flash"],
+        "operations": ["verify", "preflight", "dry-run", "flash"],
         "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
         "load_address": 0x81000000,
         "entry_address": 0x81000000,
         "entry_contract": "flat-binary-byte-zero-v1",
         "manifest_lookup_contract": "direct-object-members-v1",
+        "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+        "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
+        "preflight_scratch": {
+            "default_address": 0x00FF0000,
+            "bytes": 64 * 1024,
+            "minimum_address": 0x00040000,
+            "restore_original": True,
+        },
         "binary": {
             "filename": args.binary.name,
             "bytes": len(data),

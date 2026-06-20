@@ -135,6 +135,8 @@ def main() -> int:
                     "entry_address": 0x81000000,
                     "entry_contract": "flat-binary-byte-zero-v1",
                     "manifest_lookup_contract": "direct-object-members-v1",
+                    "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                    "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
                 },
                 "jaguar1": {
                     "path": str(args.recovery_jaguar1_bin),
@@ -144,6 +146,8 @@ def main() -> int:
                     "entry_address": 0x81000000,
                     "entry_contract": "flat-binary-byte-zero-v1",
                     "manifest_lookup_contract": "direct-object-members-v1",
+                    "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v2",
+                    "spi_master_enable_contract": "preserve-general-ctrl-enable-spi-v1",
                 },
             } if uart_enabled else None),
         },

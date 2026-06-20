@@ -72,3 +72,43 @@ The image transfer has a 45-minute overall deadline, each frame is bounded, and
 the confirmation line has a 60-second deadline. This path always overwrites the
 complete 16 MiB device. Keep an external SPI programmer connected only while
 the switch is unpowered, and retain verified backups.
+
+## SPI controller bring-up and hardware preflight
+
+The recovery stage prepares the SoC SPI interface before its first NOR command.
+On Jaguar1 it preserves the existing `GENERAL_CTRL` value and sets
+`IF_MASTER_SPI_ENA`; clearing or failing to restore this bit causes MISO to read
+high and produces a false `ffffff` JEDEC value. Luton26 retains its family-specific
+controller policy.
+
+Immediately after the descriptor, the stage now performs a short, non-writing
+hardware check and emits:
+
+```text
+PMOSREC SPI-GENERAL BEFORE=... REQUESTED=... OBSERVED=...
+PMOSREC FLASH-ID c22018
+PMOSREC SFDP 53464450 STATUS=PASS
+PMOSREC FLASH-PREFLIGHT-OK ID=c22018 ERASE=00010000 PAGE=00000100
+PMOSREC COMMAND-READY 1
+```
+
+The host sends no package bytes until `COMMAND-READY 1`. A missing device response
+is reported as `FLASH-NO-RESPONSE`, before the 16 MiB transfer begins.
+
+A fourth operation, `preflight`, exercises all SPI NOR primitives without touching
+the bootloader. The host sends a `PMOSPFT1` request selecting one aligned 64 KiB
+sector at or above `0x00040000`. The target:
+
+1. reads and CRC-32 records the complete original sector;
+2. erases it and verifies every byte is `0xff`;
+3. programs a deterministic pattern through every 256-byte page;
+4. reads and verifies the complete pattern;
+5. erases the sector again;
+6. restores the complete original sector and verifies it byte-for-byte;
+7. CRC-checks the complete 256 KiB bootloader region before and after the test and
+   requires an exact match before reporting success.
+
+The default scratch sector is `0x00ff0000`, the final 64 KiB sector of a 16 MiB
+part. Requests overlapping `0x00000000..0x0003ffff`, crossing the flash boundary,
+or omitting restoration are rejected before any write. A restoration failure is
+reported separately as `PREFLIGHT-RESTORE-FAILED`.
