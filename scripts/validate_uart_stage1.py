@@ -139,8 +139,8 @@ def main() -> int:
             b"MENU-READY",
             b"FW-RECOVERY",
             b"RECOVERY-COPY",
-            b"PMOSRECOVERY2;SOC=luton26",
-            b"PMOSRECOVERY2;SOC=jaguar1",
+            b"PMOSRECOVERY3;SOC=luton26",
+            b"PMOSRECOVERY3;SOC=jaguar1",
         ):
             if marker not in binary:
                 raise ValueError(f"stage lacks required marker {marker!r}")

@@ -19,8 +19,8 @@ common=(--target=mipsel-linux-gnu -march=mips32r2 -mabi=32 -msoft-float -mno-abi
   -Os -nostdinc -I"$root/include" -I"$root/src")
 stage1_addr=0xa7f00000
 stage1_max=0x00100000
-printf 'PMOSRECOVERY2;SOC=luton26;STRUCTURAL\n' > "$tmp/recovery-luton26.bin"
-printf 'PMOSRECOVERY2;SOC=jaguar1;STRUCTURAL\n' > "$tmp/recovery-jaguar1.bin"
+printf 'PMOSRECOVERY3;SOC=luton26;STRUCTURAL\n' > "$tmp/recovery-luton26.bin"
+printf 'PMOSRECOVERY3;SOC=jaguar1;STRUCTURAL\n' > "$tmp/recovery-jaguar1.bin"
 
 if [[ -n ${PROFILE_FILTER:-} ]]; then read -r -a profiles <<<"$PROFILE_FILTER"; else profiles=(strict development permissive strict-uart); fi
 for variant in "${profiles[@]}"; do

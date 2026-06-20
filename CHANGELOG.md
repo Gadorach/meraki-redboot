@@ -178,8 +178,8 @@
 - Corrected malformed `always_inline` declarations and declaration-order
   warnings inherited from the loader source without changing behavior.
 
-The current source tree implements build-manifest format version 7 and UART
-recovery protocol version 2. Active capabilities are documented in the README
+The current source tree implements build-manifest format version 7, PMOSRAM
+protocol version 2, and PMOSREC firmware-recovery protocol version 3. Active capabilities are documented in the README
 and `docs/`.
 
 Development records and prior release notes are maintained under:
@@ -239,3 +239,13 @@ Development records and prior release notes are maintained under:
 - Added a family-specific ICPU watchdog fallback if the soft-chip reset request does not take effect.
 - Published `PREFLIGHT=4`, protocol 3 and
   `pmosrec-v3-adaptive-uart-sparse-lz4-v1` capability boundaries.
+
+## Unreleased — PMOSREC v3 stage-validator synchronization
+
+- Updated the fixed-RAM stage validator to require embedded `PMOSRECOVERY3`
+  payloads for both Luton26 and Jaguar1.
+- Updated the Clang structural stage fixtures to embed v3 recovery markers.
+- Added regression assertions preventing a future recovery-protocol upgrade from
+  leaving the stage validator on an older descriptor generation.
+- Release archives normalize source timestamps to avoid ZIP timezone clock-skew
+  warnings on non-UTC build hosts.
