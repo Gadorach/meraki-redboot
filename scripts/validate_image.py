@@ -67,6 +67,7 @@ def main() -> int:
     ap.add_argument("--loader", type=Path, required=True)
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--symbols", type=Path, required=True)
+    ap.add_argument("--uart-stage1", type=Path)
     args = ap.parse_args()
 
     loader = args.loader.read_bytes()
@@ -151,13 +152,36 @@ def main() -> int:
     elif "crctab" not in syms:
         die("CRC-enabled loader is missing the CRC table")
 
-    warnings_expected = args.crc_policy == "warn" or args.size_policy == "legacy-warn"
-    uart_stage_present = "uart_stage1_blob_start" in syms
-    writer_expected = warnings_expected or uart_stage_present
-    if writer_expected and "loader_uart_puts" not in syms:
-        die("assembly UART writer is required by warnings or the UART stage shim")
-    if not writer_expected and "loader_uart_puts" in syms:
-        die("assembly UART writer was retained without warnings or UART stage support")
+    # The assembly UART writer is now also the data-free pre-DDR progress
+    # console, so it is required in every profile. Policy selection remains
+    # proven by the mutually exclusive marker symbols above; warning text is
+    # still conditionally assembled by head.S.
+    if "loader_uart_puts" not in syms:
+        die("assembly UART writer required by early initialization is absent")
+
+    if args.uart_stage1 is not None:
+        stage1 = args.uart_stage1.read_bytes()
+        if not stage1 or len(stage1) % 4:
+            die("UART stage-1 must be non-empty and word aligned")
+        for name in ("uart_stage1_blob_start", "uart_stage1_blob_end"):
+            if name not in syms:
+                die(f"missing embedded UART stage-1 symbol {name}")
+        start = syms["uart_stage1_blob_start"]
+        end = syms["uart_stage1_blob_end"]
+        if end - start != len(stage1):
+            die("embedded UART stage-1 symbol length differs from stage1 binary")
+        if loader[start:end] != stage1:
+            die("embedded UART stage-1 bytes differ from fixed-RAM stage1 binary")
+        for marker, description in (
+            (b"PMOSRAM READY 2", "UART stage-1 protocol marker"),
+            (b"PMOSMENU SELECT", "explicit UART menu marker"),
+            (b"PMOSREC CHAINLOAD", "embedded recovery chainload marker"),
+            (b"PMOSBOOT FLASH-FAIL", "persistent recovery fallback marker"),
+        ):
+            if marker not in stage1:
+                die(f"{description} is absent")
+    elif "uart_stage1_blob_start" in syms or "uart_stage1_blob_end" in syms:
+        die("UART stage-1 blob is present when the feature is disabled")
 
     print(
         f"validated {args.variant}: crc={args.crc_policy} size={args.size_policy} "

@@ -56,6 +56,11 @@ sed -i 's|<vtss_jaguar_regs_common.h>|<vtss/vtss_jaguar_regs_common.h>|' "$root/
 sed -i 's|<vtss_jaguar_core_regs.h>|<vtss/vtss_jaguar_core_regs.h>|' "$root/src/init_jaguar.c"
 sed -i 's|<vtss_luton26_core_regs.h>|<vtss/vtss_luton26_core_regs.h>|' "$root/src/init_luton26.c"
 
+# Apply the GCC 10 pre-DDR code-generation adaptation after copying into the
+# standalone namespace. This patch changes declarations/constant placement,
+# not register values or initialization order.
+patch -d "$root" -p1 < "$root/patches/0002-vcoreiii-loader-gcc10-codegen.patch"
+
 vtss_headers=(
   vtss_jaguar_core_regs.h
   vtss_jaguar_regs_common.h

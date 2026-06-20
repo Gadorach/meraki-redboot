@@ -39,20 +39,22 @@
 #define CONF_CM_CMASK                 7
 #define CONF_CM_CACHABLE_NONCOHERENT  3
 
-static inline __attribute__((always_inline)) void mtc0_tlbw_hazard(void)
-{
-    __asm__ __volatile__("ehb" : : : "memory");
-}
+/* These must be emitted at each pre-DDR call site.  Keeping them as statement
+ * macros avoids GCC's size-based refusal to inline a normal static-inline
+ * function inside the already force-inlined initialization graph.  The emitted
+ * instruction sequence and memory barriers are unchanged. */
+#define mtc0_tlbw_hazard() do { \
+    __asm__ __volatile__("ehb" : : : "memory"); \
+} while (0)
 
-static inline __attribute__((always_inline)) void tlb_write_indexed(void)
-{
-    __asm__ __volatile__(
-        ".set push\n\t"
-        ".set noreorder\n\t"
-        "tlbwi\n\t"
-        ".set pop\n\t"
-        : : : "memory");
-}
+#define tlb_write_indexed() do { \
+    __asm__ __volatile__( \
+        ".set push\n\t" \
+        ".set noreorder\n\t" \
+        "tlbwi\n\t" \
+        ".set pop\n\t" \
+        : : : "memory"); \
+} while (0)
 #endif
 
 #endif

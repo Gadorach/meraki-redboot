@@ -940,11 +940,13 @@ static int read_confirmation(u32 nonce)
     return text_equal(line, expected) ? 0 : -1;
 }
 
+static void halt(void) __attribute__((noreturn));
 static void halt(void)
 {
     for (;;) __asm__ __volatile__("wait");
 }
 
+void _start(void) __attribute__((section(".text.start"), used, noreturn));
 void _start(void)
 {
     u8 raw[PACKAGE_HEADER_BYTES];

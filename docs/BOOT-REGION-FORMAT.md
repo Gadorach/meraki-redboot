@@ -34,7 +34,7 @@ The loader expects a 32-byte little-endian SPIM payload header at flash offset
 ```text
 0x00  magic                 0x4d495053
 0x04  RAM load address      KSEG0 address
-0x08  padded payload bytes  non-zero and 32-byte aligned
+0x08  payload bytes         non-zero; arbitrary byte length accepted
 0x0c  entry point
 0x10  expected IEEE CRC-32
 0x14  reserved
@@ -43,8 +43,10 @@ The loader expects a 32-byte little-endian SPIM payload header at flash offset
 0x20  payload bytes
 ```
 
-CRC covers the header with the CRC word set to zero, followed by the complete
-padded payload. `tools/mkvcoreiii_payload.py` creates and verifies this format.
+CRC covers the header with the CRC word set to zero, followed by the declared
+payload byte count. `tools/mkvcoreiii_payload.py` still pads newly packaged
+kernels to 32 bytes for compatibility with older loaders, while permanent stage
+1 also accepts exact non-aligned lengths from legacy no-size images.
 
 Default policy geometry:
 

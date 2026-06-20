@@ -21,15 +21,18 @@
  */
 
 #include <vtss/vtss_jaguar_regs_common.h>
+
+#ifndef LOADER_ALWAYS_INLINE
+#define LOADER_ALWAYS_INLINE static inline __attribute__((always_inline))
+#endif
+#ifndef LOADER_SMALL_DATA
+#define LOADER_SMALL_DATA __attribute__((section(".sdata")))
+#endif
 #include <vtss/vtss_jaguar_core_regs.h>
 
 #define LOADER_BUILD_VCOREIII_JAGUAR 1
 #define MIPS_VCOREIII_MEMORY_16BIT 1
 #define EXPECTED_CHIP_ID 0x7460
-
-#ifndef LOADER_ALWAYS_INLINE
-#define LOADER_ALWAYS_INLINE static inline __attribute__((always_inline))
-#endif
 #define VTSS_DEVCPU_PI_PI_PI_MODE            VTSS_IOREG(VTSS_TO_DEVCPU_PI,0x3)
 
 #define VTSS_MACRO_CTRL_PLL5G_STATUS_PLL5G_STATUS0  VTSS_IOREG(VTSS_TO_HSIO,0x6)
@@ -64,7 +67,7 @@
 
 #define SLV_ADDR(addr) (*(volatile ulong *)((((ulong)(&addr))+(VTSS_PI_CS3_TO - VTSS_IO_ORIGIN1_OFFSET))))
 
-LOADER_ALWAYS_INLINE void init_pi(void);
+LOADER_ALWAYS_INLINE unsigned int init_pi(void);
 
 LOADER_ALWAYS_INLINE void
 init_gpio(void)
@@ -107,10 +110,10 @@ detect_slave(void)
 	return 1;
 }
 
-LOADER_ALWAYS_INLINE void
+LOADER_ALWAYS_INLINE unsigned int
 init_pi(void)
 {
-	ANNOUNCE_PROGRESS();
+	ANNOUNCE_PROGRESS("init_pi");
 
 	VTSS_ICPU_CFG_PI_MST_PI_MST_CFG |=
 		(VTSS_ICPU_CFG_PI_MST_PI_MST_CFG &
@@ -141,23 +144,22 @@ init_pi(void)
 	VTSS_ICPU_CFG_PI_MST_PI_MST_CTRL(3) |= 0x00C200B3;
 
 	if (!detect_slave()) {
-		ANNOUNCE_LITERAL(" not found\n");
 		VTSS_DEVCPU_GCB_GPIO_GPIO_ALT(0) &= ~VTSS_BIT(21);
 		/* Assume we're MS320-24: turn off green LED (gpio 21). */
 		VTSS_DEVCPU_GCB_GPIO_GPIO_OUT &= ~VTSS_BIT(21);
-	} else {
-		ANNOUNCE_OK();
+		return 0U;
 	}
+	return 1U;
 }
 
-LOADER_ALWAYS_INLINE void
+LOADER_ALWAYS_INLINE u_int32_t
 init_board(void)
 {
-	register u_int16_t data;
-	register int32_t result;
-	register int i;
+	u_int16_t data;
+	int32_t result;
+	int i;
 
-	ANNOUNCE_PROGRESS();
+	ANNOUNCE_PROGRESS("init_board");
 
 	VTSS_DEVCPU_GCB_GPIO_GPIO_OUT_SET = VTSS_BIT(12); /* Unreset PHY */
 
@@ -174,8 +176,7 @@ init_board(void)
 	}
 
 	if (result < 0) {
-		uart_puts(" phy reset failed\n");
-		return;			/* Don't mess with it if reset failed */
+		return 0U;			/* Don't mess with it if reset failed */
 	}
 
 	write_mii(0, 0, 31, 16); /* Address GPIO space */
@@ -219,11 +220,7 @@ init_board(void)
 				0x249; /* Forced 1 */
 	}
 
-	ANNOUNCE_OK();
+	return 1U;
 }
 
-u_int32_t *
-init_system_jaguar1(void)
-{
-    LOADER_INIT_SYSTEM_BODY();
-}
+DEFINE_LOADER_INIT_STAGES(init_jaguar)

@@ -1,18 +1,21 @@
-# GCC 10 incompatibility investigation
+# GNU GCC 10 loader code-generation correction
 
-The distribution-provided Ubuntu 22.04 MIPS cross compiler rejected the
-historical loader combination of `-mno-abicalls` and `-fPIC`. A later attempt to
-represent the loader with GCC 10 as direct calls plus GP-relative small data was
-also rejected after inspection showed:
+The Ubuntu 22.04 MIPS cross compiler rejects the older loader flag mixture of
+`-mno-abicalls` and `-fPIC`. That mixture was inherited from combining Linux
+architecture flags with the original loader-local flags.
 
-- `R_MIPS_HI16`/`R_MIPS_LO16` absolute references for a Jaguar diagnostic
-  string; and
-- stack-pointer use in code that executes before DDR and the stack exist.
+The maintained build now states the runtime contract directly:
 
-The code-generation validator correctly blocked that image. This investigation
-established that compiler behavior is part of the loader's executable contract,
-not merely a build convenience.
+- no SVR4 ABI calls or GOT;
+- direct calls remain within the loader's 256 MiB jump region;
+- C data uses `R_MIPS_GPREL16` relative to the loader base;
+- link-time `_gp` is absolute zero, matching the runtime base loaded by
+  `head.S`;
+- pre-DDR initialization treats saved integer registers as scratch so GCC does
+  not create a stack frame before RAM exists;
+- a build-time validator rejects stack references, unsupported C text
+  relocations, dynamic/GOT sections, and a non-zero `_gp`.
 
-Version 0.4.0 superseded the GCC 10 path with a checksum-pinned source build of
-GCC 4.7.3 and binutils 2.23.2. Modern GCC compatibility remains a possible
-future source-refactoring project, but it is not part of the release path.
+The UART RAM-loader module runs only after DRAM and the stack are established,
+so it retains the normal o32 saved-register convention while using the same
+custom-GP data/call model.

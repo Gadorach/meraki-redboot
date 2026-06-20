@@ -5,11 +5,9 @@ Meraki/Vitesse Luton26 and Jaguar-class switches. It is freestanding and does
 not require a Linux, OpenWrt, or Buildroot build.
 
 The loader initializes the SoC, DRAM, SPI mapping, caches, and UART; exits boot
-mode; copies a fixed-RAM stage containing a boot menu and both platform recovery
-programs; offers a three-second menu trigger followed by a five-second explicit
-selection window; then either runs the UART executable uploader, launches the
-matching firmware recovery, or validates and boots the SPIM kernel at flash
-offset `0x40000`.
+mode; validates a 32-byte SPIM payload header at flash offset `0x40000`; copies
+the kernel payload to RAM; verifies policy-selected CRC and size constraints;
+and enters the declared kernel entry point.
 
 ## Source-owned output
 
@@ -19,92 +17,35 @@ The generated boot region contains:
 - two independently placed copies of the same current LinuxLoader build;
 - Luton26 and Jaguar-class hardware initialization;
 - compile-time CRC and payload-size policy paths;
-- an optional fixed-RAM stage containing the UART uploader and both platform-specific firmware recovery images;
+- optional UART RAM-loader protocol v2 using an embedded fixed-RAM stage 1;
+- non-executable embedded Luton26 and Jaguar1 firmware-recovery payloads;
 - no imported executable bootloader body and no post-link binary editing.
 
 Reference binaries may be used by analysis tools to compare structure, but they
 are not build inputs. Provenance and reconstruction records are under
 `docs/history/`.
 
-## Normal build
-
-Run:
-
-```sh
-make all
-```
-
-On an interactive terminal, `make all` asks:
-
-```text
-Use Distrobox for compilation? [Y/n]:
-```
-
-Press Enter or answer `y` to use the managed Ubuntu 22.04 Distrobox. Answer `n`
-to build natively. Both paths download, checksum, build, cache, and verify the
-same pinned freestanding cross-toolchain:
-
-```text
-GNU GCC 4.7.3
-GNU binutils 2.23.2
-target: mipsel-linux-gnu
-```
-
-The toolchain and every generated build product are kept under the source tree's
-`.work/` directory. A verified toolchain left by v0.4.0-v0.4.2 in the old XDG
-cache is imported automatically on first use, avoiding an unnecessary rebuild.
-No target C library is built or used. See [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md)
-for source hashes, work-tree paths, overrides, and rebuild controls.
-
-For scripts or CI, bypass the prompt explicitly:
-
-```sh
-make all BUILD_MODE=distrobox
-make all BUILD_MODE=native
-make all BUILD_MODE=auto
-```
-
-The historical explicit target remains available:
-
-```sh
-make distrobox
-```
-
-A successful default build produces the selected boot-region image and both
-Luton26/Jaguar1 recovery programs; UART-enabled loaders embed both programs.
-
-If a v0.4.0 bootstrap stopped while generating `bfd.info`, force a clean
-toolchain retry with:
-
-```sh
-TOOLCHAIN_REBUILD=1 make all
-```
-
-The checksum-verified source downloads remain cached.
-
 ## Profiles
 
-| Profile | CRC policy | Legacy size policy | UART RAM loader | Hard slot boundary |
-|---|---|---|---|---|
-| `strict` | reject mismatch | reject threshold excess and unaligned size | disabled | reject |
-| `development` | report mismatch and continue | warn, round unaligned size to 32 bytes, and continue | enabled | reject |
-| `permissive` | CRC code omitted | omit legacy threshold; warn and round unaligned size | disabled | reject |
+| Profile | CRC policy | Legacy size policy | Hard slot boundary |
+|---|---|---|---|
+| `strict` | reject mismatch | reject above threshold | reject |
+| `development` | warn and continue | warn and continue | reject |
+| `permissive` | CRC code omitted | threshold omitted | reject |
 
 ```sh
-make all VARIANT=strict
-make all VARIANT=development
-make all VARIANT=permissive
+make VARIANT=strict
+make VARIANT=development
+make VARIANT=permissive
 make variants
 ```
 
 Custom policy and postmerkOS kernel-slot geometry:
 
 ```sh
-make all \
-  VARIANT=custom \
+make VARIANT=custom \
   CRC_POLICY=warn \
   SIZE_POLICY=hard-only \
-  UART_RAMLOADER=1 \
   PAYLOAD_SLOT_END=0x00300000
 ```
 
@@ -114,15 +55,34 @@ combination that can cross the next owned flash region.
 
 ## UART recovery build
 
-The default `development` profile includes the UART RAM loader. Pass
-`UART_RAMLOADER=0` to produce a development image without it. The UART engine
-is deliberately **not** linked as callable C inside the relocatable flash
-loader. Instead it is linked at `0xa7f00000`, embedded as data, copied through
-its uncached KSEG1 address after DDR and the stack are live, and entered with a
-non-returning assembly `jr`. Stage 1 owns all remaining boot work, including
-normal flash-kernel validation/copy and final kernel entry. This avoids the direct `J/JAL` and absolute-literal behavior of
-the historical GCC 4.7 PIC/no-ABI combination. The pre-kernel `PMOSRAM2`
-protocol provides:
+```sh
+make all \
+  VARIANT=development \
+  UART_RAMLOADER=1 \
+  PAYLOAD_SLOT_END=0x00300000
+make recovery-payloads
+```
+
+Both commands automatically use Distrobox when the host cross-toolchain is not
+installed. `make all` now builds and embeds both target-specific recovery
+payloads automatically; `make recovery-payloads` remains available for separate
+payload inspection.
+
+The `development` profile enables UART recovery by default; pass
+`UART_RAMLOADER=0` to produce a development image without it. The relocatable
+flash loader copies a separately linked protocol engine to the uncached
+`0xa7f00000` address before execution. Stage 1 first offers a three-second
+interrupt window. Any byte opens a five-second explicit menu:
+
+```text
+1 = chunked RAM loader
+2 = platform-selected firmware recovery
+```
+
+No selection continues ordinary flash-kernel boot. Fatal flash-header, mandatory
+alignment/range, strict-policy, or kernel-return failures enter the same menu
+persistently instead of chaining to an unknown 4 MiB flash region. The
+pre-kernel `PMOSRAM2` protocol provides:
 
 - a timer-calibrated probe interval;
 - bounded header, frame, and total-transfer states;
@@ -132,88 +92,55 @@ protocol provides:
 - D-cache writeback/invalidate and I-cache invalidate before execution;
 - detected SoC-family reporting.
 
-The companion `PMOSPKG2` recovery payloads are built separately for Luton26 and
-Jaguar-class SPI register maps and embedded into every UART-enabled stage. They validate the release package, exact model,
-loader digest, firmware layout, flash geometry, JEDEC ID, protection and status
-state, and payload descriptor before the destructive confirmation and full-NOR
-write path.
+The companion `PMOSPKG2` recovery payloads are built for Luton26 and Jaguar-class
+SPI register maps and embedded as non-executable stage-1 data. Option 2 copies
+only the detected platform's image to `0x81000000`, performs cache maintenance,
+and enters it. The recovery image validates the full release manifest, exact
+model, loader digest, firmware layout, flash geometry, JEDEC ID, protection and
+status state, and payload descriptor before a nonce-gated full-NOR write.
+
+## Toolchain and outputs
+
+The release path uses GCC 10 `mipsel-linux-gnu-gcc` and matching GNU binutils.
+The pre-DDR initialization sources are force-inlined into call-free, stackless,
+GP-relative objects; assembly enters them with PC-relative `bal`. See
+[`docs/GCC10-CODEGEN.md`](docs/GCC10-CODEGEN.md). On CachyOS, plain `make`/`make all` automatically uses the existing Ubuntu
+22.04 Distrobox when the GNU MIPS cross-toolchain is absent from the host.
+`make distrobox` explicitly selects that path. Native Debian/Ubuntu users can
+run:
+
+```sh
+./scripts/install-deps.sh
+make -j"$(nproc)" all VARIANT=development UART_RAMLOADER=1
+```
 
 Primary outputs:
 
 ```text
-.work/artifacts/vcoreiii-linuxloader-development.bin
-.work/artifacts/vcoreiii-linuxloader-development.bin.sha256
-.work/artifacts/vcoreiii-linuxloader-development.bin.manifest.json
-.work/recovery/artifacts/recovery-luton26.bin
-.work/recovery/artifacts/recovery-luton26.descriptor.json
-.work/recovery/artifacts/recovery-jaguar1.bin
-.work/recovery/artifacts/recovery-jaguar1.descriptor.json
+artifacts/vcoreiii-linuxloader-development.bin
+artifacts/vcoreiii-linuxloader-development.bin.sha256
+artifacts/vcoreiii-linuxloader-development.bin.manifest.json
+artifacts/vcoreiii-uart-stage1-development.bin
+artifacts/vcoreiii-recovery-luton26.bin
+artifacts/vcoreiii-recovery-jaguar1.bin
+payloads/uart-firmware-recovery/artifacts/recovery-luton26.descriptor.json
+payloads/uart-firmware-recovery/artifacts/recovery-jaguar1.descriptor.json
 ```
 
-Diagnostic products are retained alongside them:
+The boot-region image is exactly `0x40000` bytes. Its two relocatable loader
+copies each contain the same validated stage-1 image, including byte-identical
+non-executable recovery payloads. The manifest records the stage-1 fixed
+address, menu timeout, payload sizes and SHA-256 values, section-execution
+policy, selected validation policies, geometry, source hashes, and boot-region
+SHA-256.
 
-```text
-.work/build/development/*.o
-.work/build/development/*.o.s
-.work/build/development/*.o.dis
-.work/build/development/*.o.relocs
-.work/build/development/uart-stage1/uart-stage1.elf
-.work/build/development/uart-stage1/uart-stage1.bin
-.work/build/development/uart-stage1/uart-stage1.elf.dis
-.work/logs/build-distrobox.log
-.work/logs/loader-codegen-validation-development.log
-.work/logs/uart-stage1-validation-development.log
-```
-
-Run `make support-bundle` after either a successful or failed build to create a
-small shareable archive containing objects, disassemblies, relocation tables,
-manifests, and logs without bundling the large compiler binaries.
-
-The loader image is exactly `0x40000` bytes. The manifest records selected
-policies, geometry, source hashes, toolchain identity and versions,
-boot-region SHA-256, and the UART capability contract.
-
-### Expected development-image serial sequence
-
-With no input, stage 1 prints the probe marker, waits three seconds, and continues
-normal boot:
-
-```text
-Low level initialization complete, exiting boot mode
-PMOSRAM STAGE1 COPY
-PMOSBOOT CONTEXT LOADER=... PAYLOAD=40040000 FALLBACK=40400000
-PMOSBOOT MENU-PROBE TIMEOUT_MS=00000bb8
-PMOSBOOT PASS-MENU-PROBE: NO INPUT; CONTINUING NORMAL BOOT
-PMOSBOOT PASS-HEADER-ADDRESS: ADDRESS: 0x40040000
-...
-PMOSBOOT PASS-CRC: EXPECTED: ... | GOT: ...
-PMOSBOOT PASS-EXEC: ENTRY: 0x81000000
-```
-
-Any byte during the probe opens the menu. The trigger byte is discarded; a new
-explicit option must arrive within five seconds:
-
-```text
-PMOSBOOT MENU 1=UART-RAMLOADER 2=FW-RECOVERY
-PMOSBOOT MENU-READY TIMEOUT_MS=00001388
-```
-
-`1` enters a persistent `PMOSRAM READY 2` upload listener. `2` copies and runs
-the embedded recovery matching the detected SoC. Invalid input or no explicit
-selection prints `WARN-MENU-*` and resumes normal boot. Fatal flash-image checks
-print the exact `FAIL-*` values and automatically launch the matching embedded
-recovery rather than chaining to the historical flash fallback.
-
-
-### Historical unaligned kernel compatibility
-
-The original 32-byte assembly copy loop rounded an unaligned declared payload
-size up implicitly. Development and permissive builds now reproduce that
-behavior explicitly: they emit `WARN-SIZE-ALIGN`, calculate an effective size
-with `(declared + 31) & ~31`, and use that effective size for hard-boundary,
-overlap, CRC, copy, and cache checks. Strict builds emit `FAIL-SIZE-ALIGN` and
-fall back. Zero length and every hard safety boundary remain unconditional
-failures.
+The development profile is CRC-warn and legacy-size-warn. Mandatory structural
+checks remain hard failures in every profile: nonzero payload length, hard slot
+boundary, valid KSEG0 load address, arithmetic overflow, stack and stage-1
+overlap. Fixed-RAM stage 1 copies the exact declared byte count, so legacy
+kernels whose size is not a multiple of 32 can boot safely. `VARIANT=permissive`
+disables CRC calculation and the legacy threshold, but intentionally does not
+disable the hard safety checks.
 
 ## Kernel payload packaging
 
@@ -237,25 +164,18 @@ make inspect VARIANT=development
 make validate VARIANT=development
 ```
 
-The test target covers source policies, payload packing, wrapper-fit arithmetic,
-UART protocol contracts, MIPS32r2 structural builds, and both recovery payload
-variants. A release build additionally verifies the pinned compiler and linker,
-checks that pre-DDR initialization is a single forced-inline leaf with no
-stack references or nested call/link instructions, rejects unresolved/dynamic
-linkage, and requires the final loader to contain no remaining relocations.
-The CP0/TLB compatibility helpers are explicitly `always_inline`; ordinary
-`static inline` was insufficient under GCC 4.7.3 with `-Os` and caused the
-observed pre-DDR ABI frame.
-Physical loader boot and destructive flash acceptance still require the staged
-process in [`docs/HARDWARE-ACCEPTANCE.md`](docs/HARDWARE-ACCEPTANCE.md).
+The test target covers source policies, payload packing, the actual wrapper-fit
+recipe, UART protocol contracts, UART-enabled MIPS32r2 structural builds, and
+both recovery payload variants. Physical loader boot and destructive flash
+acceptance still require the staged process in
+[`docs/HARDWARE-ACCEPTANCE.md`](docs/HARDWARE-ACCEPTANCE.md).
 
 ## Documentation
 
 - [`docs/BUILDING.md`](docs/BUILDING.md)
-- [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md)
+- [`docs/GCC10-CODEGEN.md`](docs/GCC10-CODEGEN.md)
 - [`docs/BOOT-REGION-FORMAT.md`](docs/BOOT-REGION-FORMAT.md)
 - [`docs/SOURCE-PATCHES.md`](docs/SOURCE-PATCHES.md)
 - [`docs/UART-RAMLOADER.md`](docs/UART-RAMLOADER.md)
-- [`docs/RAMLOADER-HARDWARE-TEST.md`](docs/RAMLOADER-HARDWARE-TEST.md)
 - [`payloads/uart-firmware-recovery/README.md`](payloads/uart-firmware-recovery/README.md)
 - [`docs/HARDWARE-ACCEPTANCE.md`](docs/HARDWARE-ACCEPTANCE.md)

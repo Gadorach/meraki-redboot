@@ -1,0 +1,21 @@
+GCC 4.7.3 v0.7.0 stage/menu layout audit
+
+  [ 1] .text             PROGBITS        a7f00000 000060 0013d0 00  AX  0   0 16
+  [ 2] .rodata           PROGBITS        a7f013d0 001430 000560 00   A  0   0 16
+  [ 3] .embedded_recovery PROGBITS        a7f01930 001990 006ec0 00   A  0   0 16
+
+ffffffffa7f00000 T uart_stage1_entry
+ffffffffa7f01930 R uart_recovery_luton26_start
+ffffffffa7f05020 R uart_recovery_jaguar1_start
+ffffffffa7f05020 R uart_recovery_luton26_end
+ffffffffa7f087f0 R uart_recovery_jaguar1_end
+
+Required menu and recovery markers:
+PMOSBOOT FLASH-FAIL
+PMOSMENU PROBE SOC=
+PMOSMENU RAM-LOADER-DONE
+PMOSMENU RECOVERY-WAIT
+PMOSMENU SELECT 1=RAM-LOADER 2=FW-RECOVERY TIMEOUT_MS=
+PMOSMENU TIMEOUT
+PMOSREC CHAINLOAD SOC=
+SIZE-ZERO

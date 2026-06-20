@@ -4,6 +4,16 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 command -v clang >/dev/null 2>&1 || { echo "SKIP: clang is not installed"; exit 0; }
 command -v ld.lld >/dev/null 2>&1 || { echo "SKIP: ld.lld is not installed"; exit 0; }
 command -v llvm-objcopy >/dev/null 2>&1 || { echo "SKIP: llvm-objcopy is not installed"; exit 0; }
+if command -v llvm-nm >/dev/null 2>&1; then
+  nm_tool=llvm-nm
+else
+  nm_tool=nm
+fi
+if command -v llvm-readelf >/dev/null 2>&1; then
+  readelf_tool=llvm-readelf
+else
+  readelf_tool=readelf
+fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 common=(--target=mipsel-linux-gnu -march=mips32r2 -mabi=32 -msoft-float -mno-abicalls
@@ -15,6 +25,9 @@ for family in 1 2; do
   ld.lld -m elf32ltsmip -static -nostdlib \
     -T "$root/payloads/uart-firmware-recovery/linker.ld" \
     "$tmp/recovery-$family.o" -o "$tmp/recovery-$family.elf"
+  python3 "$root/scripts/validate_fixed_payload.py" \
+    --elf "$tmp/recovery-$family.elf" --entry 0x81000000 \
+    --readelf "$readelf_tool" --nm "$nm_tool"
   llvm-objcopy -O binary "$tmp/recovery-$family.elf" "$tmp/recovery-$family.bin"
   test "$(stat -c %s "$tmp/recovery-$family.bin")" -gt 0
   test "$(stat -c %s "$tmp/recovery-$family.bin")" -le 4194304

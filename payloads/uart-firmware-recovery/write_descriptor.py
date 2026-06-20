@@ -20,6 +20,8 @@ def main() -> int:
     parser.add_argument("--family", choices=sorted(MODELS), required=True)
     parser.add_argument("--family-id", type=lambda value: int(value, 0), required=True)
     parser.add_argument("--spi-address", type=lambda value: int(value, 0), required=True)
+    parser.add_argument("--load-address", type=lambda value: int(value, 0), required=True)
+    parser.add_argument("--entry-address", type=lambda value: int(value, 0), required=True)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -33,6 +35,8 @@ def main() -> int:
         "soc_family": args.family,
         "soc_family_id": args.family_id,
         "spi_software_mode_address": args.spi_address,
+        "load_address": args.load_address,
+        "entry_address": args.entry_address,
         "accepted_models": MODELS[args.family],
         "accepted_flash_bytes": 16 * 1024 * 1024,
         "accepted_jedec_ids": ["c22018", "ef4018", "012018", "20ba18", "c84018"],

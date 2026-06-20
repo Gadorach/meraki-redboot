@@ -1,40 +1,43 @@
-# Source policy implementation
+# Source policy and GCC 10 adaptation
 
-LinuxLoader behavior is selected at compile time. The generated image is never
-modified by post-link binary editing.
+LinuxLoader behavior is selected at compile time. Generated images are never
+modified by post-link binary patching.
 
-## CRC policy
+## Validation policies
 
-- `strict`: calculate payload CRC and enter the normal fallback path on a
-  mismatch.
-- `warn`: calculate CRC, print a serial warning on mismatch, and continue.
-- `off`: compile a copy-only loop and omit the expected-CRC load, CRC table,
-  header CRC work, payload CRC work, and final comparison.
+Every profile requires a non-zero payload and enforces the
+hard slot boundary. CRC and legacy-size behavior are independently selected:
 
-## Size policy
-
-Every profile requires a non-zero, 32-byte-aligned payload and enforces
-`HARD_PAYLOAD_LIMIT`. The independent legacy threshold supports:
-
-- `legacy-strict`: reject above `LEGACY_PAYLOAD_LIMIT`;
-- `legacy-warn`: print a warning and continue only when the hard boundary is
-  still satisfied;
-- `hard-only`: omit the legacy-threshold comparison.
-
-The configuration checker rejects inconsistent geometry before compilation.
-The hard limit cannot cross the configured payload-slot boundary, and the
-payload-slot boundary cannot cross the fallback-region stride.
-
-## Profiles
-
-| Profile | CRC | Legacy size threshold | Hard boundary |
+| Profile | CRC | Legacy threshold | Hard boundary |
 |---|---|---|---|
 | `strict` | reject | reject | reject |
 | `development` | warn | warn | reject |
 | `permissive` | omitted | omitted | reject |
 
-Use `make test` to validate source contracts, payload packing, the actual wrapper
-recipe, UART protocol contracts, and both recovery-payload target variants.
+`patches/0001-vcoreiii-loader-validation-policies.patch` implements those
+source-level policy branches against the imported GPL loader.
 
-The design-development record is kept in
-[`history/source-policy-development.md`](history/source-policy-development.md).
+## GCC 10 pre-DDR adaptation
+
+`patches/0002-vcoreiii-loader-gcc10-codegen.patch` is applied after GPL import.
+It preserves hardware values and operation order while changing compiler-facing
+structure:
+
+- splits Jaguar1 and Luton26 initialization into explicit leaf stages;
+- separates DDR configuration, readiness wait, and training;
+- forces private helpers inline;
+- replaces callable CP0/TLB helpers with exact statement macros;
+- removes pre-DDR strings, tables, literals, GOT, BSS, and writable data;
+- replaces the clock lookup table with immediate selection;
+- keeps serial progress messages in assembly;
+- adds runtime-base-relative assembly dispatch to each stage;
+- adds the post-DDR fixed-RAM stage-1 copy/cache/tail-jump path.
+
+The Makefile compiles pre-DDR C to assembly, then
+`scripts/normalize_mips_local_jumps.py` changes only compiler-local J-format
+jumps to PC-relative branches. The final validator rejects any remaining stack,
+call/jump, relocation, data, GOT, BSS, or unresolved-symbol dependency.
+
+The UART protocol and permanent flash-kernel continuation live in
+`src/uart_ramloader.c`, linked separately by `src/uart_stage1.lds`; they are not
+part of the GPL refresh patch.

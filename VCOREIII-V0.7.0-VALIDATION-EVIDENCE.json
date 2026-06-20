@@ -1,0 +1,95 @@
+{
+  "authoritative_compiler_pending": "Ubuntu GCC 10.3/binutils 2.38 Distrobox",
+  "embedded_recovery": {
+    "jaguar1": {
+      "load_address": "0x81000000",
+      "sha256": "374de667625a44ed6fe13e6d298544ce932601e2ab648af63b6d6a91da7e0c98",
+      "size": 14288
+    },
+    "luton26": {
+      "load_address": "0x81000000",
+      "sha256": "22d887043fd2a9bd04449febe64b0e534dff626855eafd367d66ac847d805cb5",
+      "size": 14064
+    }
+  },
+  "fallback": {
+    "dual_wrapper_copies_retained": true,
+    "later_flash_region_chain": false,
+    "persistent_uart_menu_on_flash_failure": true
+  },
+  "format": "postmerkos.vcoreiii-gcc10-stage-menu-validation.v1",
+  "hardware_status": "menu-and-embedded-recovery-not-yet-tested",
+  "legacy_kernel": {
+    "exact_byte_copy": true,
+    "new_packer_still_32_byte_pads": true,
+    "unaligned_declared_size_supported": true
+  },
+  "menu": {
+    "buffered_input_drained": true,
+    "options": {
+      "1": "PMOSRAM2",
+      "2": "platform firmware recovery"
+    },
+    "probe_timeout_ms": 3000,
+    "selection_timeout_ms": 5000
+  },
+  "policies": {
+    "development": {
+      "crc": "warn",
+      "size": "legacy-warn"
+    },
+    "permissive": {
+      "crc": "off",
+      "size": "hard-only"
+    },
+    "strict": {
+      "crc": "strict",
+      "size": "legacy-strict"
+    }
+  },
+  "profiles": {
+    "development": {
+      "boot_region_sha256": "7fb0485210f7cf97227b1815574d65a3a98847a2dee323fa586c2042efb5b772",
+      "boot_region_size": 262144,
+      "clang_loader_size": 66592,
+      "clang_stage1_size": 52816,
+      "loader_size": 47872,
+      "stage1_sha256": "9fc877040ac7459f710e7cc3599597488eaf6f447505f5ffc11465030b365adc",
+      "stage1_size": 34800
+    },
+    "permissive": {
+      "boot_region_sha256": "5b14a57d4c63cf8a15df2e3b1e2cb98868c27512fef1e59bb920f6fbe56f7999",
+      "boot_region_size": 262144,
+      "clang_loader_size": 62848,
+      "clang_stage1_size": 52416,
+      "loader_size": 44352,
+      "stage1_sha256": "f7d8cf8fed31eed95e4405968553e6b08cc7ced3def89202af29f26f8c7b1891",
+      "stage1_size": 34608
+    },
+    "strict": {
+      "boot_region_sha256": "6f32bb56ca454180050dc8f8f0185ee3305ab98710ebaf4eff85bce47512f82e",
+      "boot_region_size": 262144,
+      "clang_loader_size": 66336,
+      "clang_stage1_size": 52768,
+      "loader_size": 47616,
+      "stage1_sha256": "6c6bc2687faf4141a7046cde8177853cef6fc94195bd0db3622bebaea152a01d",
+      "stage1_size": 34736
+    }
+  },
+  "reference_compiler": "GCC 4.7.3/binutils 2.23.2",
+  "tests": {
+    "clang_profiles": [
+      "strict",
+      "development",
+      "permissive"
+    ],
+    "codegen_fixtures": "pass",
+    "gcc473_profiles": [
+      "strict",
+      "development",
+      "permissive"
+    ],
+    "python": 30
+  },
+  "version": "0.7.0"
+}

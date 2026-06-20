@@ -84,154 +84,216 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("CRC_POLICY_permissive := off", makefile)
         self.assertIn("SIZE_POLICY_permissive := hard-only", makefile)
 
-    def test_release_build_uses_pinned_gcc_473_legacy_pic(self) -> None:
+    def test_gnu_loader_uses_data_free_runtime_relative_stages(self) -> None:
         makefile = (ROOT / "Makefile").read_text()
-        config = (ROOT / "scripts/toolchain-config.sh").read_text()
-        installer = (ROOT / "scripts/install-legacy-toolchain.sh").read_text()
+        linker = (ROOT / "src/loader.lds").read_text()
+        head = (ROOT / "src/head.S").read_text()
         validator = (ROOT / "scripts/validate_loader_codegen.py").read_text()
-        self.assertIn("-mno-abicalls -fPIC -G 65535", makefile)
-        self.assertNotIn("-mgpopt", makefile)
+        normalizer = (ROOT / "scripts/normalize_mips_local_jumps.py").read_text()
+        self.assertIn("-mno-abicalls -fno-pic -fno-pie -G 0", makefile)
         self.assertIn("PRE_DDR_CALL_USED_FLAGS", makefile)
-        for register in ("s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7"):
-            self.assertIn(f"-fcall-used-{register}", makefile)
-        self.assertIn("LOADER_ALWAYS_INLINE", (ROOT / "src/init.h").read_text())
-        self.assertIn("-finline-limit=100000", makefile)
-        self.assertIn("gcc-4.7.3.tar.bz2", config)
-        self.assertIn("5671a2dd3b6ac0d23f305cb11a796aeb", config)
-        self.assertIn("binutils-2.23.2.tar.bz2", config)
-        self.assertIn("fe914e56fed7a9ec2eb45274b1f2e14b", config)
-        self.assertIn("all-gcc", installer)
-        toolchain_check = (ROOT / "scripts/check-toolchain.sh").read_text()
-        self.assertIn("-fcall-used-s7", toolchain_check)
-        self.assertIn("-finline-limit=100000", toolchain_check)
-        self.assertIn("without-headers", installer)
-        self.assertIn("pre-DDR initialization references the stack pointer", validator)
-        self.assertIn("final linked loader retains relocations", validator)
+        self.assertIn("-fcall-used-s7", makefile)
+        self.assertNotIn("-fcall-used-fp", makefile)
+        self.assertIn("normalize_mips_local_jumps.py", makefile)
+        self.assertIn("loader_stage_call", head)
+        self.assertIn("addu\tt9, t9, gp", head)
+        self.assertNotIn("loader_pic_call", head)
+        self.assertIn(".forbidden_loader_data", linker)
+        self.assertIn("relocatable flash loader C must not allocate data, literals, or a GOT", linker)
+        self.assertIn("pre-DDR C must be leaf-only", validator)
+        self.assertIn("data-free, call-free, stackless, and GOT-free", validator)
+        self.assertIn("LOCAL_JUMP_RE", normalizer)
+        self.assertIn("REQUIRED_GCC_MAJOR ?= 10", makefile)
 
-    def test_pre_ddr_initializer_is_one_stackless_leaf_contract(self) -> None:
-        makefile = (ROOT / "Makefile").read_text()
-        common = (ROOT / "src/init.h").read_text()
-        validator = (ROOT / "scripts/validate_loader_codegen.py").read_text()
-        self.assertIn("PRE_DDR_CFLAGS", makefile)
-        self.assertIn("LOADER_ALWAYS_INLINE", common)
-        self.assertIn("LOADER_INIT_SYSTEM_BODY", common)
-        self.assertNotIn("init_system(void)", common)
-        for source_name, entry in (
-            ("init_luton26.c", "init_system_luton26"),
-            ("init_jaguar.c", "init_system_jaguar1"),
+    def test_cp0_tlb_primitives_are_statement_macros(self) -> None:
+        mipsregs = (ROOT / "include/asm/mipsregs.h").read_text()
+        self.assertIn("#define mtc0_tlbw_hazard() do", mipsregs)
+        self.assertIn("#define tlb_write_indexed() do", mipsregs)
+        self.assertIn('"ehb"', mipsregs)
+        self.assertIn('"tlbwi\\n\\t"', mipsregs)
+        self.assertNotRegex(mipsregs, r"static inline void\s+(?:mtc0_tlbw_hazard|tlb_write_indexed)")
+
+    def test_gcc10_pre_ddr_helpers_are_force_inlined_and_data_free(self) -> None:
+        init_h = (ROOT / "src/init.h").read_text()
+        jaguar = (ROOT / "src/init_jaguar.c").read_text()
+        luton = (ROOT / "src/init_luton26.c").read_text()
+        combined = "\n".join((init_h, jaguar, luton))
+
+        self.assertIn("#define LOADER_ALWAYS_INLINE", combined)
+        self.assertIn("#define LOADER_STAGE_ENTRY", combined)
+        self.assertNotIn("__func__", combined)
+        self.assertNotIn('uart_puts("', combined)
+        self.assertNotIn("} __attribute__((always_inline))", combined)
+        self.assertNotRegex(combined, r"(?m)^\s*static inline\s")
+        self.assertNotRegex(combined, r"(?m)^\s*(?:volatile\s+)?register\s")
+        self.assertIn("movz   %[speed]", init_h)
+        self.assertNotIn("switch (divider", init_h)
+
+        for helper in (
+            "clock_speed_khz", "init_uart", "uart_puts", "init_memctl",
+            "wait_memctl", "lookfor_and_incr", "train_bytelane",
+            "test_memory", "init_memory_controller_config_stage",
+            "wait_memory_controller_stage", "train_memory_stage",
+            "set_tlb_entry", "create_tlb", "init_tlb", "init_pll",
+            "init_spi", "init_cache_prepare_stage", "init_icache_stage",
+            "init_dcache_stage", "init_cache_enable_stage", "read_mii",
+            "write_mii",
         ):
-            source = (ROOT / "src" / source_name).read_text()
-            self.assertLess(source.index("init_board(void)"), source.index(entry))
-            self.assertIn("LOADER_INIT_SYSTEM_BODY();", source)
-        self.assertIn("call/link instructions", validator)
-        self.assertIn('"jal", "jalr", "bal", "bgezal", "bltzal"', validator)
+            self.assertRegex(init_h, rf"LOADER_ALWAYS_INLINE\s+[\w\s\*]+\n{helper}\s*\(", helper)
 
+        self.assertIn("DEFINE_LOADER_INIT_STAGES(init_jaguar)", jaguar)
+        self.assertIn("DEFINE_LOADER_INIT_STAGES(init_luton26)", luton)
 
-    def test_pre_ddr_cp0_helpers_are_mandatory_inline(self) -> None:
-        header = (ROOT / "include/asm/mipsregs.h").read_text()
-        self.assertIn(
-            "static inline __attribute__((always_inline)) void mtc0_tlbw_hazard(void)",
-            header,
+    def test_early_initialization_order_is_preserved(self) -> None:
+        head = (ROOT / "src/head.S").read_text()
+        stages = (
+            "stage_probe", "stage_console", "stage_pll", "stage_spi",
+            "stage_memctl_config", "stage_memctl_wait", "stage_memtrain",
+            "stage_irq", "stage_cache_prepare", "stage_icache",
+            "stage_dcache", "stage_cache_enable", "stage_pi",
+            "stage_board", "stage_finish",
         )
-        self.assertIn(
-            "static inline __attribute__((always_inline)) void tlb_write_indexed(void)",
-            header,
+        for prefix in ("init_jaguar", "init_luton26"):
+            cursor = 0
+            for stage in stages:
+                token = f"loader_stage_call {prefix}_{stage}"
+                position = head.find(token, cursor)
+                self.assertGreaterEqual(position, 0, token)
+                cursor = position + len(token)
+
+        for label in (
+            "loader_init_pll_text", "loader_init_spi_text",
+            "loader_init_memctl_text", "loader_wait_memctl_text",
+            "loader_training_dram_text", "loader_init_irq_text",
+            "loader_init_dram_uncached_text", "loader_init_icache_text",
+            "loader_init_dcache_text", "loader_enable_caches_text",
+            "loader_init_pi_text", "loader_init_board_text",
+            "loader_low_level_done_text",
+        ):
+            self.assertIn(label, head)
+
+    def test_platform_critical_initialization_values_are_preserved(self) -> None:
+        jaguar = (ROOT / "src/init_jaguar.c").read_text()
+        luton = (ROOT / "src/init_luton26.c").read_text()
+
+        for token in (
+            "VTSS_BIT(12) | VTSS_BIT(20)",
+            "VTSS_F_ICPU_CFG_PI_MST_PI_MST_CFG_CLK_DIV(0x1f)",
+            "VTSS_F_ICPU_CFG_CPU_SYSTEM_CTRL_GENERAL_CTRL_IF_MASTER_PI_ENA",
+            "VTSS_ICPU_CFG_PI_MST_PI_MST_CTRL(3) |= 0x00C200B3",
+            "write_mii(0, 0, 0, data)",
+            "VTSS_DEVCPU_GCB_SIO_CTRL_SIO_CLOCK(1) = 0x14",
+        ):
+            self.assertIn(token, jaguar)
+
+        for token in (
+            "VTSS_BIT(31) | VTSS_BIT(30)",
+            "get_chip_id() != 0x7425",
+            "write_mii(1, 12, 0, data)",
+            "VTSS_DEVCPU_GCB_SIO_CTRL_SIO_CLOCK = 0x14",
+            "i == 10 && get_chip_id() == 0x7425",
+        ):
+            self.assertIn(token, luton)
+
+    def test_uart_loader_is_permanent_fixed_ram_boot_continuation(self) -> None:
+        source = (ROOT / "src/uart_ramloader.c").read_text()
+        head = (ROOT / "src/head.S").read_text()
+        linker = (ROOT / "src/uart_stage1.lds").read_text()
+        makefile = (ROOT / "Makefile").read_text()
+        self.assertIn("UART_STAGE1_ENTRY void uart_stage1_entry", source)
+        self.assertIn('section(".text.entry")', source)
+        self.assertIn("boot_flash_kernel(loader_base, soc_family)", source)
+        self.assertIn("persistent_recovery_menu(soc_family", source)
+        self.assertIn("uart_stage1_blob_start", head)
+        self.assertIn(".incbin UART_STAGE1_FILE", head)
+        self.assertIn("uart_stage1_copy_loop", head)
+        self.assertIn("cache\t0x15", head)
+        self.assertIn("cache\t0x10", head)
+        self.assertIn("move\ta1, gp", head)
+        self.assertIn("loader_uart_stage1_handoff", head)
+        self.assertIn("jr\tt9", head)
+        self.assertIn("PMOSRAM STAGE1 COPY", head)
+        self.assertIn("lbu\tt5, 0(t0)", head)
+        self.assertIn("sb\tt5, 0(t3)", head)
+        self.assertIn("ranges_overlap_physical", source)
+        self.assertNotIn("PMOSRAM STAGE1 RETURN", head)
+        self.assertIn("ENTRY(uart_stage1_entry)", linker)
+        self.assertIn("ASSERT(uart_stage1_entry == UART_STAGE1_ADDRESS", linker)
+        self.assertIn(".embedded_recovery", linker)
+        self.assertIn("UART_STAGE1_OBJ :=", makefile)
+        self.assertIn("UART_RECOVERY_BLOBS_OBJ", makefile)
+        self.assertIn("LDFLAGS_UART_STAGE1", makefile)
+        self.assertNotIn("LOADER_OBJECTS += $(BUILD_DIR)/uart_ramloader.o", makefile)
+
+    def test_uart_smoke_payload_is_fixed_address_and_non_destructive(self) -> None:
+        source = (ROOT / "payloads/uart-smoke-test/smoke.c").read_text()
+        linker = (ROOT / "payloads/uart-smoke-test/linker.ld").read_text()
+        makefile = (ROOT / "payloads/uart-smoke-test/Makefile").read_text()
+        top_makefile = (ROOT / "Makefile").read_text()
+        readme = (ROOT / "payloads/uart-smoke-test/README.md").read_text()
+        self.assertIn('section(".text.start")', source)
+        self.assertIn('PMOSRAM SMOKE OK', source)
+        self.assertNotRegex(source, r"(?i)erase|page.program|write.enable")
+        self.assertIn("ASSERT(_start == 0x81000000", linker)
+        self.assertIn("validate_fixed_payload.py", makefile)
+        self.assertIn("uart-smoke-test:", top_makefile)
+        self.assertIn("local-uart-smoke-test:", top_makefile)
+        self.assertIn("PMOSRAM RETURNED", readme)
+        self.assertIn("PMOSRAM FLASH-BOOT", readme)
+
+    def test_recovery_payload_entry_matches_default_upload_address(self) -> None:
+        source = (ROOT / "payloads/uart-firmware-recovery/recovery.c").read_text()
+        linker = (ROOT / "payloads/uart-firmware-recovery/linker.ld").read_text()
+        makefile = (ROOT / "payloads/uart-firmware-recovery/Makefile").read_text()
+        descriptor = (ROOT / "payloads/uart-firmware-recovery/write_descriptor.py").read_text()
+        self.assertIn('section(".text.start")', source)
+        self.assertIn("KEEP(*(.text.start))", linker)
+        self.assertIn("ASSERT(_start == 0x81000000", linker)
+        self.assertIn("validate_fixed_payload.py", makefile)
+        self.assertIn('"entry_address": args.entry_address', descriptor)
+        self.assertIn('"load_address": args.load_address', descriptor)
+
+    def test_make_entry_points_and_codegen_report_are_declared(self) -> None:
+        makefile = (ROOT / "Makefile").read_text()
+        distrobox = (ROOT / "scripts/distrobox-build.sh").read_text()
+        self.assertRegex(makefile, r"(?m)^local-all: check-tools check-config image validate$")
+        self.assertRegex(
+            makefile,
+            r"(?m)^\$\(CODEGEN_REPORT\): \$\(LOADER_ELF\)$",
         )
-        self.assertNotRegex(header, r"static inline void (?:mtc0_tlbw_hazard|tlb_write_indexed)")
-
-    def test_generated_outputs_and_toolchain_are_source_local(self) -> None:
-        makefile = (ROOT / "Makefile").read_text()
-        config = (ROOT / "scripts/toolchain-config.sh").read_text()
-        dispatcher = (ROOT / "scripts/build-dispatch.sh").read_text()
-        self.assertIn("WORK_ROOT ?= $(CURDIR)/.work", makefile)
-        self.assertIn("$(WORK_ROOT)/build/$(VARIANT)", makefile)
-        self.assertIn("$(WORK_ROOT)/artifacts", makefile)
-        self.assertIn("postmerkos_work_root", config)
-        self.assertIn("printf '%s/.work", config)
-        self.assertIn("support-bundle", makefile)
-        self.assertIn("build-native.log", dispatcher)
-        support = (ROOT / "scripts/create-support-bundle.sh").read_text()
-        self.assertIn("validate_uart_stage1.py", support)
-        self.assertIn("uart_stage1.lds", support)
-        self.assertIn("Importing verified legacy toolchain", (ROOT / "scripts/install-legacy-toolchain.sh").read_text())
-
-    def test_toolchain_bootstrap_disables_recursive_info_generation(self) -> None:
-        deps = (ROOT / "scripts/install-deps.sh").read_text()
-        installer = (ROOT / "scripts/install-legacy-toolchain.sh").read_text()
-        for token in ("bison", "gawk", "makeinfo", "m4", "texinfo"):
-            self.assertIn(token, deps)
-        self.assertIn("required=(bash make flex bison gawk makeinfo m4", installer)
-        self.assertIn("make -j\"$jobs\" MAKEINFO=true all-binutils all-gas all-ld", installer)
-        self.assertIn("make MAKEINFO=true install-binutils install-gas install-ld", installer)
-        self.assertIn("make -j\"$jobs\" MAKEINFO=true all-gcc", installer)
-        self.assertIn("make MAKEINFO=true install-gcc", installer)
-
-
-    def test_uart_stage_validator_failure_survives_tee(self) -> None:
-        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        self.assertIn("set -o pipefail; python3 scripts/validate_uart_stage1.py", makefile)
-        self.assertIn("PIPESTATUS[0]", makefile)
-
-    def test_make_all_dispatches_to_optional_distrobox(self) -> None:
-        makefile = (ROOT / "Makefile").read_text()
-        dispatcher = (ROOT / "scripts/build-dispatch.sh").read_text()
-        self.assertIn("./scripts/build-dispatch.sh __all-local", makefile)
-        self.assertIn("Use Distrobox for compilation? [Y/n]", dispatcher)
-        self.assertIn("BUILD_MODE", dispatcher)
-        self.assertIn("__all-local: __loader-local recovery-payloads", makefile)
-
-    def test_current_docs_describe_source_built_gcc473(self) -> None:
-        readme = (ROOT / "README.md").read_text()
-        building = (ROOT / "docs/BUILDING.md").read_text()
-        build_script = (ROOT / "build.sh").read_text()
-        for text in (readme, building, build_script):
-            self.assertIn("GCC 4.7.3", text)
-            self.assertNotIn("pinned AOSP", text)
-        self.assertIn("make all", readme)
-        self.assertIn("BUILD_MODE=distrobox", building)
-        self.assertTrue((ROOT / "docs/TOOLCHAIN.md").is_file())
+        self.assertIn("GNU MIPS toolchain not found on host; building through Distrobox.", makefile)
+        self.assertIn("if (( missing )); then", makefile)
+        self.assertIn("target=local-all", distrobox)
+        self.assertRegex(makefile, r"(?m)^local-recovery-payloads: check-tools$")
+        self.assertIn("target=local-recovery-payloads", distrobox)
 
     def test_development_profile_enables_uart_recovery(self) -> None:
         makefile = (ROOT / "Makefile").read_text()
         self.assertIn("UART_RAMLOADER_development := 1", makefile)
         self.assertIn("UART_RAMLOADER_strict := 0", makefile)
         self.assertIn("UART_RAMLOADER_permissive := 0", makefile)
+        checker = (ROOT / "scripts/check_config.py").read_text()
+        self.assertIn("UART_STAGE1_ADDRESS ?= 0xa7f00000", makefile)
+        self.assertIn("UART_STAGE1_MAX_SIZE ?= 0x00100000", makefile)
+        self.assertIn("UART_MENU_TIMEOUT_MS ?= 5000", makefile)
+        self.assertIn("expected_uncached_alias", checker)
+        self.assertIn("uncached KSEG1 alias of uart-ram-end", checker)
 
-
-    def test_uart_engine_is_fixed_ram_stage_not_flash_c_code(self) -> None:
-        makefile = (ROOT / "Makefile").read_text()
-        head = (ROOT / "src/head.S").read_text()
-        linker = (ROOT / "src/uart_stage1.lds").read_text()
-        validator = (ROOT / "scripts/validate_uart_stage1.py").read_text()
-        manifest = (ROOT / "scripts/write_manifest.py").read_text()
-
-        self.assertIn("UART_RAMLOADER_STAGE1_ADDR ?= 0xa7f00000", makefile)
-        self.assertIn("STAGE1_CFLAGS", makefile)
-        self.assertIn("UART_STAGE1_ELF", makefile)
-        self.assertNotRegex(makefile, r"LOADER_OBJECTS\s*[:+]?=.*uart_ramloader\.o")
-        self.assertIn(".incbin UART_STAGE1_FILE", head)
-        self.assertIn("UART_STAGE1_LOAD_ADDR", head)
-        self.assertIn("jr\tt9", head)
-        self.assertIn("PMOSRAM STAGE1 COPY", head)
-        self.assertNotIn("PMOSRAM STAGE1 RETURN", head)
-        self.assertIn("loader_kernel_continue", head)
-        self.assertIn("defined(CONFIG_UART_RAMLOADER)", head)
-        self.assertIn("UART_STAGE1_LOAD_ADDR", linker)
-        self.assertIn(".uart_stage1", linker)
-        self.assertIn("fixed uncached RAM entry", validator)
-        self.assertIn("direct jump/call targets outside", validator)
-        image_validator = (ROOT / "scripts/validate_image.py").read_text()
-        self.assertIn('uart_stage_present = "uart_stage1_blob_start" in syms', image_validator)
-        self.assertIn("writer_expected = warnings_expected or uart_stage_present", image_validator)
-        self.assertIn('"postmerkos.vcoreiii-linuxloader-build.v7"', manifest)
-
-    def test_uart_stage1_reserves_uncached_alias_above_upload_window(self) -> None:
-        makefile = (ROOT / "Makefile").read_text()
-        config = (ROOT / "scripts/check_config.py").read_text()
-        self.assertIn("UART_RAMLOADER_RAM_END ?= 0x87f00000", makefile)
-        self.assertIn("UART_RAMLOADER_STAGE1_ADDR ?= 0xa7f00000", makefile)
-        self.assertIn("expected_alias = args.uart_ram_end + 0x20000000", config)
-        self.assertIn("UART stage1 must begin at the uncached alias", config)
+    def test_local_jump_normalizer_preserves_returns(self) -> None:
+        import importlib.util
+        module_path = ROOT / "scripts/normalize_mips_local_jumps.py"
+        spec = importlib.util.spec_from_file_location("jump_normalizer", module_path)
+        self.assertIsNotNone(spec)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        source = "\tj\t$L12\n\tj\t$BB3_4\n\tj\t.Ltmp7\n\tj\t$31\n"
+        normalized, count = module.normalize(source)
+        self.assertEqual(count, 3)
+        self.assertIn("\tb\t$L12", normalized)
+        self.assertIn("\tb\t$BB3_4", normalized)
+        self.assertIn("\tb\t.Ltmp7", normalized)
+        self.assertIn("\tj\t$31", normalized)
 
     def test_payload_packer_generates_loader_compatible_crc(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -20,21 +20,20 @@ spec.loader.exec_module(sender)
 
 class UartRecoveryContractTests(unittest.TestCase):
     def test_loader_rejects_flags_and_bounds_entire_object(self) -> None:
-        self.assertIn("header->version != RAMLOADER_PROTOCOL_VERSION", LOADER_SOURCE)
-        self.assertIn("header->flags != 0u", LOADER_SOURCE)
+        self.assertIn("header->version != RAMLOADER_PROTOCOL_VERSION || header->flags != 0u", LOADER_SOURCE)
         self.assertIn("end > CONFIG_UART_RAMLOADER_RAM_END", LOADER_SOURCE)
         self.assertIn("header->entry_addr >= end", LOADER_SOURCE)
         with self.assertRaisesRegex(sender.ProtocolError, "DRAM range"):
             sender.make_header(b"x" * 128, 0x87EFFFC0, 0x87EFFFC0, 64)
 
     def test_loader_receive_paths_are_bounded_and_abort_to_boot(self) -> None:
-        self.assertIn("static int uart_recv_exact", LOADER_SOURCE)
+        self.assertIn("UART_STAGE1_INLINE int uart_recv_exact", LOADER_SOURCE)
         self.assertIn("struct pmos_timer", LOADER_SOURCE)
         self.assertIn("RAMLOADER_TRANSFER_TIMEOUT_MS", LOADER_SOURCE)
         self.assertNotIn("static u8 uart_getc(void)", LOADER_SOURCE)
-        self.assertIn('abort_to_boot("HEADER-TIMEOUT")', LOADER_SOURCE)
-        self.assertIn('abort_to_boot("FRAME-DATA-TIMEOUT")', LOADER_SOURCE)
-        self.assertIn('abort_to_boot("TRANSFER-TIMEOUT")', LOADER_SOURCE)
+        self.assertIn('RETURN_ABORT_LITERAL("HEADER-TIMEOUT")', LOADER_SOURCE)
+        self.assertIn('RETURN_ABORT_LITERAL("FRAME-DATA-TIMEOUT")', LOADER_SOURCE)
+        self.assertIn('RETURN_ABORT_LITERAL("TRANSFER-TIMEOUT")', LOADER_SOURCE)
         self.assertIn("CONFIG_UART_RAMLOADER_COUNT_HZ", LOADER_SOURCE)
         self.assertNotIn("timeout_ticks", LOADER_SOURCE)
 
@@ -44,109 +43,48 @@ class UartRecoveryContractTests(unittest.TestCase):
         self.assertIn("cache_prepare_for_execution(header.load_addr, header.total_size)", LOADER_SOURCE)
         self.assertLess(LOADER_SOURCE.index("cache_prepare_for_execution"), LOADER_SOURCE.rindex("entry();"))
 
-    def test_detected_soc_is_passed_into_ramloader(self) -> None:
+    def test_detected_soc_is_passed_into_fixed_ram_stage1(self) -> None:
         self.assertIn("li\ts7, 2", HEAD_SOURCE)
         self.assertIn("li\ts7, 1", HEAD_SOURCE)
         self.assertIn("move\ta0, s7", HEAD_SOURCE)
+        self.assertIn("uart_stage1_blob_start", HEAD_SOURCE)
+        self.assertIn("uart_stage1_copy_loop", HEAD_SOURCE)
+        self.assertIn("li\tt9, CONFIG_UART_STAGE1_ADDRESS", HEAD_SOURCE)
+        self.assertNotIn("loader_pic_call uart_ramloader_probe_and_run", HEAD_SOURCE)
 
-
-    def test_flash_loader_only_copies_and_calls_fixed_ram_stage(self) -> None:
+    def test_stage_menu_requires_explicit_selection_and_embeds_recovery(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        stage_linker = (ROOT / "src/uart_stage1.lds").read_text(encoding="utf-8")
-        entry_source = (ROOT / "src/uart_stage1_entry.S").read_text(encoding="utf-8")
-        self.assertIn(".incbin UART_STAGE1_FILE", HEAD_SOURCE)
-        self.assertIn("jr\tt9", HEAD_SOURCE)
-        self.assertNotIn("jalr\tt9", HEAD_SOURCE)
-        self.assertNotIn("bal\tuart_ramloader_probe_and_run", HEAD_SOURCE)
-        self.assertNotIn("uart_ramloader.o", makefile.split("LOADER_OBJECTS :=", 1)[1].splitlines()[0])
-        self.assertIn("ENTRY(uart_stage1_entry)", stage_linker)
-        self.assertIn("UART_STAGE1_LOAD_ADDR", stage_linker)
-        self.assertIn("uart_stage1_main", entry_source)
-        self.assertIn("b uart_stage1_main", entry_source)
-        self.assertIn("uart_stage1_jump_kernel", entry_source)
-        self.assertNotIn("uart_stage1_jump_fallback", entry_source)
-        self.assertNotIn("PMOSRAM STAGE1 RETURN", HEAD_SOURCE)
-        self.assertIn("loader_kernel_continue", HEAD_SOURCE)
-        self.assertIn("and\ta1, a1, t0", HEAD_SOURCE)
-        self.assertIn("move\ta3, gp", HEAD_SOURCE)
-        # GNU as 2.23.2 requires relocatable label addresses to be formed with
-        # explicit HI16/LO16 relocations; `li reg, label` requires an absolute
-        # assembly-time expression and fails before link.
-        self.assertIn("lui\ta0, %hi(loader_uart_stage1_copy_text)", HEAD_SOURCE)
-        self.assertIn("addiu\ta0, a0, %lo(loader_uart_stage1_copy_text)", HEAD_SOURCE)
-        self.assertNotIn("loader_uart_stage1_return_text", HEAD_SOURCE)
-        self.assertNotIn("li\ta0, loader_uart_stage1_copy_text", HEAD_SOURCE)
-        self.assertNotIn("li\ta0, loader_uart_stage1_return_text", HEAD_SOURCE)
-
-
-    def test_fixed_ram_stage_owns_flash_kernel_boot(self) -> None:
-        stage = LOADER_SOURCE
-        entry_source = (ROOT / "src/uart_stage1_entry.S").read_text(encoding="utf-8")
+        linker = (ROOT / "src/uart_stage1.lds").read_text(encoding="utf-8")
+        blobs = (ROOT / "src/uart_recovery_blobs.S").read_text(encoding="utf-8")
+        validator = (ROOT / "scripts/validate_uart_stage1.py").read_text(encoding="utf-8")
+        sender_source = (ROOT / "tools/uart_ramload_send.py").read_text(encoding="utf-8")
         for token in (
-            "PMOSBOOT", "PASS", "WARN", "FAIL", "SKIP",
-            "HEADER-ADDRESS", "MAGIC", "SIZE-ALIGN", "SIZE-HARD",
-            "SIZE-LEGACY", "LOAD-SEGMENT", "LOAD-OVERFLOW",
-            "ENTRY-RANGE", "COPY", "CRC", "CACHE", "EXEC",
-            "boot_flash_kernel", "CONFIG_HARD_PAYLOAD_LIMIT",
-            "CONFIG_LEGACY_PAYLOAD_LIMIT", "SPIM_LOADER_MAGIC",
-            "STAGE1-OVERLAP", "STACK-OVERLAP",
-        ):
-            self.assertIn(token, stage)
-        self.assertIn("uart_stage1_jump_kernel", entry_source)
-        self.assertNotIn("uart_stage1_jump_fallback", entry_source)
-        self.assertIn("uart_stage1_main", stage)
-        self.assertIn("boot_flash_kernel(soc_family, payload_header_addr)", stage)
-
-    def test_flash_failure_launches_embedded_platform_recovery(self) -> None:
-        stage = LOADER_SOURCE
-        blob_source = (ROOT / "src/uart_stage1_recovery_blobs.S").read_text(encoding="utf-8")
-        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        for token in (
-            "launch_embedded_recovery", "recovery_luton26_blob_start",
-            "recovery_jaguar1_blob_start", "RECOVERY-COPY", "RECOVERY-EXEC",
-            'launch_embedded_recovery(soc_family, "MAGIC")',
-            'launch_embedded_recovery(soc_family, "CRC")',
-        ):
-            self.assertIn(token, stage)
-        self.assertIn(".incbin RECOVERY_LUTON26_FILE", blob_source)
-        self.assertIn(".incbin RECOVERY_JAGUAR1_FILE", blob_source)
-        self.assertIn("UART_STAGE1_RECOVERY_OBJ", makefile)
-        self.assertNotIn("fallback_to_next_region", stage)
-        self.assertNotIn("uart_stage1_jump_fallback", stage)
-
-    def test_stage2_menu_requires_explicit_choice_and_times_out_to_boot(self) -> None:
-        stage = LOADER_SOURCE
-        for token in (
-            "PMOSBOOT MENU-PROBE", "PMOSBOOT MENU-READY",
-            "1=UART-RAMLOADER", "2=FW-RECOVERY",
-            "CONFIG_UART_MENU_TIMEOUT_MS", "MENU-OPTION-1", "MENU-OPTION-2",
-            "NO EXPLICIT 1/2 SELECTION; CONTINUING NORMAL BOOT",
-        ):
-            self.assertIn(token, stage)
-        self.assertIn("choice == (u8)'1'", stage)
-        self.assertIn("choice == (u8)'2'", stage)
-        self.assertIn("boot_flash_kernel(soc_family, payload_header_addr)", stage)
-
-
-    def test_flash_size_alignment_uses_historical_rounded_copy_policy(self) -> None:
-        self.assertIn("copy_size = (header.size + 31u) & ~31u", LOADER_SOURCE)
-        self.assertIn('report_pair("PMOSBOOT", "WARN", "SIZE-ALIGN"', LOADER_SOURCE)
-        self.assertIn('report_pair("PMOSBOOT", "FAIL", "SIZE-ALIGN"', LOADER_SOURCE)
-        self.assertIn("offset < copy_size", LOADER_SOURCE)
-        self.assertIn("cache_prepare_for_execution(header.load_addr, copy_size)", LOADER_SOURCE)
-        self.assertIn('report_pair("PMOSBOOT", "PASS", "COPY"', LOADER_SOURCE)
-
-    def test_image_checks_emit_structured_pass_warn_fail_diagnostics(self) -> None:
-        for token in (
-            'report_pair("PMOSBOOT", "PASS", "MAGIC"',
-            'report_pair("PMOSBOOT", "WARN", "CRC"',
-            'report_pair("PMOSBOOT", "FAIL", "CRC"',
-            'report_pair("PMOSRAM", "PASS", "HEADER-CRC"',
-            'report_pair("PMOSRAM", "FAIL", "IMAGE-CRC"',
-            'report_digest_pair("PMOSRAM", "PASS", "IMAGE-SHA256"',
-            'report_digest_pair("PMOSRAM", "FAIL", "IMAGE-SHA256"',
+            "PMOSMENU PROBE", "PMOSMENU SELECT 1=RAM-LOADER 2=FW-RECOVERY",
+            "CONFIG_UART_MENU_TIMEOUT_MS", "PMOSREC CHAINLOAD",
+            "persistent_recovery_menu", "PMOSBOOT FLASH-FAIL",
         ):
             self.assertIn(token, LOADER_SOURCE)
+        self.assertIn("(void)uart_getc_now();", LOADER_SOURCE)
+        self.assertIn("choice == (u8)'1' || choice == (u8)'2'", LOADER_SOURCE)
+        self.assertIn(".embedded_recovery", linker)
+        self.assertIn('section .embedded_recovery,"a"', blobs)
+        self.assertIn("UART_RECOVERY_LUTON26_FILE", blobs)
+        self.assertIn("UART_RECOVERY_JAGUAR1_FILE", blobs)
+        self.assertIn("UART_RECOVERY_BLOBS_OBJ", makefile)
+        self.assertIn("validate_uart_stage1.py", makefile)
+        self.assertIn('"X" in embedded.flags', validator)
+        self.assertIn('"-j", text.name', validator)
+        self.assertIn('link.write_all(b\"\\n\")', sender_source)
+        self.assertIn('link.write_all(b\"1\\n\")', sender_source)
+
+
+    def test_menu_discards_buffered_noise_and_flash_copy_accepts_exact_lengths(self) -> None:
+        source = LOADER_SOURCE
+        self.assertIn("uart_drain_input();", source)
+        self.assertIn("Only input received after this prompt counts", source)
+        self.assertNotIn('persistent_recovery_menu(soc_family, "SIZE-ALIGN")', source)
+        self.assertIn('persistent_recovery_menu(soc_family, "SIZE-ZERO")', source)
+        self.assertIn('((volatile u8 *)load_addr)[i] = payload[i];', source)
 
     def test_recovery_enforces_manifest_flash_and_terminal_contracts(self) -> None:
         for token in (
@@ -192,12 +130,6 @@ class UartRecoveryContractTests(unittest.TestCase):
             ("PMOSRAM ACK 00000007", "PMOSRAM NACK 00000007", "PMOSRAM VERIFIED"),
             1.0,
         )
-
-    def test_sender_enters_stage2_menu_option_one(self) -> None:
-        link = mock.Mock()
-        link.wait_for.side_effect = ["PMOSBOOT MENU-PROBE TIMEOUT_MS=00000bb8", "PMOSBOOT MENU-READY TIMEOUT_MS=00001388", "PMOSRAM READY 2 SOC=jaguar1"]
-        sender.enter_boot_menu(link, 60.0)
-        self.assertEqual(link.write_all.call_args_list, [mock.call(b" "), mock.call(b"1")])
 
     def test_sender_header_integrity_and_short_writes(self) -> None:
         payload = b"payload" * 100

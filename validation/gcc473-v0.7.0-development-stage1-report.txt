@@ -1,0 +1,17 @@
+elf=build/development/uart-stage1.elf
+entry=0xa7f00000
+text_address=0xa7f00000
+text_size=0x13d0
+embedded_address=0xa7f01930
+embedded_size=0x6ec0
+allocated_end=0xa7f087f0
+allocated_size=0x87f0
+luton26_size=0x36f0
+luton26_sha256=22d887043fd2a9bd04449febe64b0e534dff626855eafd367d66ac847d805cb5
+jaguar1_size=0x37d0
+jaguar1_sha256=374de667625a44ed6fe13e6d298544ce932601e2ab648af63b6d6a91da7e0c98
+embedded_section_executable=no
+instruction_validation_section=.text
+runtime_relocations=none
+undefined_symbols=none
+result=pass

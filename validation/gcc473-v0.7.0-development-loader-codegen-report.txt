@@ -1,0 +1,13 @@
+postmerkOS VCore-III GCC 10 data-free early-init report
+object=build/development/init_luton26.o
+  text_relocations=none
+  global_text_symbols=init_luton26_stage_probe,init_luton26_stage_console,init_luton26_stage_pll,init_luton26_stage_spi,init_luton26_stage_memctl_config,init_luton26_stage_memctl_wait,init_luton26_stage_memtrain,init_luton26_stage_irq,init_luton26_stage_cache_prepare,init_luton26_stage_icache,init_luton26_stage_dcache,init_luton26_stage_cache_enable,init_luton26_stage_pi,init_luton26_stage_board,init_luton26_stage_finish
+  unresolved_symbols=none
+  allocated_sections=.text:0xc50,.reginfo:0x18
+object=build/development/init_jaguar.o
+  text_relocations=none
+  global_text_symbols=init_jaguar_stage_probe,init_jaguar_stage_console,init_jaguar_stage_pll,init_jaguar_stage_spi,init_jaguar_stage_memctl_config,init_jaguar_stage_memctl_wait,init_jaguar_stage_memtrain,init_jaguar_stage_irq,init_jaguar_stage_cache_prepare,init_jaguar_stage_icache,init_jaguar_stage_dcache,init_jaguar_stage_cache_enable,init_jaguar_stage_pi,init_jaguar_stage_board,init_jaguar_stage_finish
+  unresolved_symbols=none
+  allocated_sections=.text:0xea0,.reginfo:0x18
+final_elf_sections=.gnu.attributes,.loader,.shstrtab,.strtab,.symtab,NULL
+status=PASS

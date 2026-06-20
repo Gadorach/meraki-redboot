@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import subprocess
 from pathlib import Path
 
 
@@ -39,49 +38,35 @@ def main() -> int:
     ap.add_argument("--uart-probe-timeout-ms", type=integer, required=True)
     ap.add_argument("--uart-interbyte-timeout-ms", type=integer, required=True)
     ap.add_argument("--uart-menu-timeout-ms", type=integer, required=True)
-    ap.add_argument("--uart-stage1-addr", type=integer, required=True)
-    ap.add_argument("--uart-stage1-elf", type=Path)
-    ap.add_argument("--uart-stage1-bin", type=Path)
-    ap.add_argument("--recovery-luton26-bin", type=Path)
-    ap.add_argument("--recovery-jaguar1-bin", type=Path)
-    ap.add_argument("--compiler", required=True)
-    ap.add_argument("--linker", required=True)
-    ap.add_argument("--toolchain-id", required=True)
     ap.add_argument("--loader", type=Path, required=True)
     ap.add_argument("--image", type=Path, required=True)
+    ap.add_argument("--toolchain-info", type=Path, required=True)
+    ap.add_argument("--codegen-report", type=Path, required=True)
+    ap.add_argument("--uart-stage1", type=Path)
+    ap.add_argument("--uart-stage1-address", type=integer)
+    ap.add_argument("--uart-stage1-report", type=Path)
+    ap.add_argument("--recovery-luton26", type=Path)
+    ap.add_argument("--recovery-jaguar1", type=Path)
     ap.add_argument("--output", type=Path, required=True)
     args = ap.parse_args()
     sources = sorted(Path("src").glob("*")) + sorted(Path("include").rglob("*.h"))
     uart_enabled = enabled(args.uart_ramloader)
     loader_data = args.loader.read_bytes()
-    if uart_enabled and b"PMOSRAM READY 2" not in loader_data:
-        raise SystemExit("UART RAM-loader was requested but the embedded stage1 marker is absent")
-    if uart_enabled and (args.uart_stage1_elf is None or args.uart_stage1_bin is None):
-        raise SystemExit("UART RAM-loader requires stage1 ELF and binary metadata")
-    if uart_enabled and (args.recovery_luton26_bin is None or args.recovery_jaguar1_bin is None):
-        raise SystemExit("UART stage requires both embedded platform recovery binaries")
+    stage1_data = args.uart_stage1.read_bytes() if args.uart_stage1 else b""
+    if uart_enabled and b"PMOSRAM READY 2" not in stage1_data:
+        raise SystemExit("UART RAM-loader was requested but fixed-RAM stage 1 lacks its v2 marker")
+    if uart_enabled and b"PMOSMENU SELECT" not in stage1_data:
+        raise SystemExit("UART stage 1 lacks the explicit recovery menu marker")
+    if uart_enabled and b"PMOSREC CHAINLOAD" not in stage1_data:
+        raise SystemExit("UART stage 1 lacks embedded recovery chainload support")
+    if uart_enabled and not args.uart_stage1:
+        raise SystemExit("UART RAM-loader was requested without a stage-1 binary")
+    if uart_enabled and (not args.recovery_luton26 or not args.recovery_jaguar1):
+        raise SystemExit("UART stage 1 requires both embedded recovery binaries")
     if args.uart_ram_start >= args.uart_ram_end:
         raise SystemExit("UART RAM range is invalid")
-    compiler_version = subprocess.run(
-        [args.compiler, "--version"], check=True, text=True, capture_output=True
-    ).stdout.splitlines()[0]
-    compiler_dumpversion = subprocess.run(
-        [args.compiler, "-dumpversion"], check=True, text=True, capture_output=True
-    ).stdout.strip()
-    linker_version = subprocess.run(
-        [args.linker, "--version"], check=True, text=True, capture_output=True
-    ).stdout.splitlines()[0]
     data = {
-        "format": "postmerkos.vcoreiii-linuxloader-build.v7",
-        "toolchain": {
-            "id": args.toolchain_id,
-            "compiler": args.compiler,
-            "compiler_version": compiler_version,
-            "compiler_dumpversion": compiler_dumpversion,
-            "linker": args.linker,
-            "linker_version": linker_version,
-            "code_generation_model": "stackless-flash-stage-plus-fixed-ram-boot-continuation",
-        },
+        "format": "postmerkos.vcoreiii-linuxloader-build.v3",
         "variant": args.variant,
         "policies": {
             "crc": args.crc_policy,
@@ -90,54 +75,47 @@ def main() -> int:
             "payload_slot_end": args.payload_slot_end,
             "legacy_payload_limit": args.legacy_payload_limit,
             "hard_payload_limit": args.hard_payload_limit,
-            "unaligned_size_behavior": (
-                "reject" if args.size_policy == "legacy-strict"
-                else "warn-and-round-up-to-32-bytes"
-            ),
         },
         "uart_ramloader": {
             "enabled": uart_enabled,
             "protocol_version": args.uart_protocol_version if uart_enabled else None,
             "probe_timeout_ms": args.uart_probe_timeout_ms,
             "interbyte_timeout_ms": args.uart_interbyte_timeout_ms,
-            "menu_selection_timeout_ms": args.uart_menu_timeout_ms,
+            "menu_timeout_ms": args.uart_menu_timeout_ms,
+            "menu_options": {"1": "ram-loader", "2": "firmware-recovery"},
             "maximum_payload_bytes": args.uart_max_size,
             "ram_start": args.uart_ram_start,
             "ram_end": args.uart_ram_end,
             "supported_soc_families": ["luton26", "jaguar1"],
             "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
             "cache_maintenance": "mips32r2-dcache-writeback-invalidate-icache-invalidate",
-            "execution_model": "fixed-RAM boot menu owns UART upload, embedded platform recovery, and flash-kernel continuation",
-            "boot_menu": {
-                "probe_timeout_ms": args.uart_probe_timeout_ms,
-                "selection_timeout_ms": args.uart_menu_timeout_ms,
-                "options": {"1": "uart-ramloader", "2": "embedded-firmware-recovery"},
-                "noise_behavior": "invalid/no explicit option continues normal boot",
-            },
-            "image_check_diagnostics": "structured-pass-warn-fail-skip-values-v1",
-            "stage1_load_address": args.uart_stage1_addr if uart_enabled else None,
-            "stage1_elf": ({
-                "path": str(args.uart_stage1_elf),
-                "size": args.uart_stage1_elf.stat().st_size,
-                "sha256": sha(args.uart_stage1_elf),
-            } if uart_enabled else None),
-            "stage1_binary": ({
-                "path": str(args.uart_stage1_bin),
-                "size": args.uart_stage1_bin.stat().st_size,
-                "sha256": sha(args.uart_stage1_bin),
-            } if uart_enabled else None),
-            "embedded_recovery": ({
+            "execution_model": "embedded-fixed-ram-stage1",
+            "stage1_address": args.uart_stage1_address if uart_enabled else None,
+            "stage1_size": args.uart_stage1.stat().st_size if uart_enabled else None,
+            "stage1_sha256": sha(args.uart_stage1) if uart_enabled else None,
+            "stage1_codegen_validation": (
+                args.uart_stage1_report.read_text().splitlines()
+                if uart_enabled and args.uart_stage1_report else []
+            ),
+            "embedded_recovery": {
+                "section_executable": False,
                 "luton26": {
-                    "path": str(args.recovery_luton26_bin),
-                    "size": args.recovery_luton26_bin.stat().st_size,
-                    "sha256": sha(args.recovery_luton26_bin),
+                    "size": args.recovery_luton26.stat().st_size if args.recovery_luton26 else None,
+                    "sha256": sha(args.recovery_luton26) if args.recovery_luton26 else None,
+                    "load_address": 0x81000000,
+                    "entry_address": 0x81000000,
                 },
                 "jaguar1": {
-                    "path": str(args.recovery_jaguar1_bin),
-                    "size": args.recovery_jaguar1_bin.stat().st_size,
-                    "sha256": sha(args.recovery_jaguar1_bin),
+                    "size": args.recovery_jaguar1.stat().st_size if args.recovery_jaguar1 else None,
+                    "sha256": sha(args.recovery_jaguar1) if args.recovery_jaguar1 else None,
+                    "load_address": 0x81000000,
+                    "entry_address": 0x81000000,
                 },
-            } if uart_enabled else None),
+            },
+        },
+        "toolchain": {
+            "details": args.toolchain_info.read_text().splitlines(),
+            "codegen_validation": args.codegen_report.read_text().splitlines(),
         },
         "loader": {
             "path": str(args.loader),
@@ -154,10 +132,6 @@ def main() -> int:
             "Built entirely from source; GPL-adjacent RedBoot binaries are not build inputs.",
             "The 256 KiB wrapper contains active and fallback copies of the same compiled loader.",
             "The hard payload boundary is enforced independently of the selected compatibility policy.",
-            "Non-strict size policies reproduce the historical 32-byte rounded copy for unaligned declared sizes.",
-            "Flash-kernel and UART executable checks emit structured PASS/WARN/FAIL/SKIP records with compared values.",
-            "The flash-resident loader contains no ordinary C UART calls; fixed-RAM stage 1 owns the explicit boot menu, UART upload, embedded platform recovery, SPIM kernel validation/copy, and kernel entry.",
-            "Fatal flash-kernel validation failures launch the embedded recovery matching the detected SoC family.",
         ],
     }
     args.output.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")

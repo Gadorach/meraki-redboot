@@ -1,61 +1,51 @@
 # Hardware acceptance plan
 
 Automated structural tests do not replace target testing. Use a device with a
-verified 16 MiB SPI backup, external programmer access, 3.3 V UART, and a stable
-power source.
+verified 16 MiB SPI backup, external programmer access, 3.3 V UART, and stable
+power.
 
-## Loader boot acceptance
+## Loader and permanent stage-1 boot
 
-1. Capture the complete serial boot log with the source-built strict profile.
-2. Confirm the reported SoC family and normal SPIM kernel boot.
-3. Verify the active and fallback descriptors from `make inspect` against the
-   generated manifest.
-4. Repeat with the development and permissive profiles using payloads with
-   correct and deliberately incorrect CRC values while staying inside the hard
-   payload boundary.
-5. Confirm that oversized, zero-length, unaligned, and boundary-crossing SPIM
-   payloads are rejected.
+1. Boot the development image without serial input.
+2. Confirm the complete early-init sequence and `PMOSMENU PROBE`.
+3. After approximately three seconds with no input, confirm `PMOSBOOT FLASH
+   HEADER=...` and `PMOSRAM FLASH-BOOT ...`, followed by the normal kernel.
+4. Send one random byte during the probe but do not select an option. Confirm
+   the five-second `PMOSMENU TIMEOUT` and normal flash boot.
+5. Interrupt the probe, explicitly select `1`, allow `HEADER-TIMEOUT`, and
+   confirm the session returns to flash boot.
+6. Interrupt the probe, explicitly select `2`, and confirm the detected
+   platform's `PMOSREC READY 2` banner. Do not send a flash package yet.
+7. Boot an invalid zero-length or hard-oversize flash payload and confirm
+   `PMOSBOOT FLASH-FAIL ...` enters a persistent menu rather than jumping 4 MiB
+   forward. Separately verify that a known legacy kernel with a non-32-byte
+   declared size is copied exactly and reaches its entry point.
+8. Verify active/fallback descriptors and hashes against the manifest.
+9. Repeat strict/permissive policy tests after the development baseline boots.
 
-## UART RAM-loader acceptance
+## Non-destructive UART RAM execution
 
-1. Boot a UART-enabled image without host input and capture the exact sequence:
-   `STAGE1 COPY`, `MENU-PROBE`, approximately three seconds without input,
-   structured `PASS/WARN/FAIL/SKIP` image diagnostics, and `PMOSBOOT PASS-EXEC` before normal kernel output.
-2. If a marker is missing, preserve `.work/build/<variant>/uart-stage1/`, the
-   loader disassembly, and `.work/logs/` with `make support-bundle`.
-3. Trigger the menu and provide no valid option; confirm the five-second menu timeout and normal boot.
-4. Select option 1, interrupt header/frame transfers, and confirm bounded abort followed by the persistent retry listener.
-5. Exercise frame NACK/retry and a duplicate final accepted frame.
-6. Load a non-destructive diagnostic payload on both Luton26 and Jaguar-class
-   targets and confirm cache-safe execution. If it returns, confirm stage 1
-   resumes the flash-kernel path deterministically.
-7. Select option 2 on each family and confirm the embedded recovery selected matches the detected SoC.
-8. Confirm the uploaded payload range remains below `0x87f00000` and the
-   embedded UART engine reports fixed execution at `0xa7f00000`.
+1. Build `make uart-smoke-test`.
+2. Upload the generated 132-byte (compiler-dependent size may vary) payload
+   using the command in `payloads/uart-smoke-test/README.md`.
+3. Confirm `PMOSRAM VERIFIED`, `PMOSRAM EXEC 81000000`, and
+   `PMOSRAM SMOKE OK`.
+4. Confirm the payload returns and stage 1 prints `PMOSRAM RETURNED` followed by
+   `PMOSRAM FLASH-BOOT ...` and a normal kernel boot.
+5. Interrupt header/frame transfers and confirm bounded abort followed by the
+   same stage-1 flash boot.
+6. Exercise NACK/retry and duplicate-final-frame handling.
 
-## Recovery dry-run acceptance
+## Recovery dry-run and destructive acceptance
 
-1. Run host-only `verify` against each exact target model.
-2. Run `dry-run`; confirm image, manifest, payload descriptor, JEDEC ID, flash
-   status, model, family, geometry, and all digests are checked.
-3. Confirm no erase or page-program command is issued in dry-run.
-4. Exercise unknown JEDEC, protected status, stale Micron flag status, malformed
-   manifest, wrong payload digest, wrong model, and unsupported operation cases.
+Before any write, confirm exact model, family, full manifest, image and loader
+digests, payload descriptor, JEDEC ID, protection state, and geometry. Dry-run
+must issue no erase/program command.
 
-## Destructive recovery acceptance
+Proceed destructively only with an external restore path. Capture erase,
+program, and full readback progress; compare a complete external flash read to
+the selected artifact; then verify loader, kernel, rootfs, identity, management,
+ports, LEDs, and PoE where applicable.
 
-Proceed only after dry-run passes and an external programmer can restore the
-board.
-
-1. Confirm the host full-flash authorization and target nonce are both required.
-2. Capture erase, program, and full readback progress.
-3. Verify the terminal success line and power-cycle instruction.
-4. Read the complete flash with the external programmer and compare it to the
-   selected artifact.
-5. Boot and verify loader, kernel, rootfs, model identity, management access,
-   ports, LEDs, and PoE where applicable.
-6. Test controlled interruption only on expendable hardware with a proven
-   external restore procedure.
-
-Record exact board model, flash JEDEC ID, loader manifest SHA-256, firmware
-manifest SHA-256, serial adapter, baud rate, and all logs for each run.
+Record the board model, flash JEDEC ID, loader and firmware manifest SHA-256,
+serial adapter, baud rate, compiler identity, and complete logs.

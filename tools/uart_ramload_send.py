@@ -81,17 +81,6 @@ class SerialLink:
                 return line
 
 
-
-def enter_boot_menu(link: SerialLink, timeout: float) -> None:
-    """Enter stage-2 option 1 while remaining compatible with pre-menu loaders."""
-    line = link.wait_for(("PMOSBOOT MENU-PROBE", "PMOSRAM READY 2"), timeout)
-    if line.startswith("PMOSRAM READY 2"):
-        return
-    link.write_all(b" ")
-    link.wait_for(("PMOSBOOT MENU-READY",), 4.0)
-    link.write_all(b"1")
-    link.wait_for(("PMOSRAM READY 2",), 5.0)
-
 def baud_constant(baud: int) -> int:
     name = f"B{baud}"
     if not hasattr(termios, name):
@@ -168,7 +157,6 @@ def main() -> int:
     parser.add_argument("--ack-timeout", type=float, default=5.0)
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--follow", action="store_true", help="continue displaying serial output after execution starts")
-    parser.add_argument("--legacy-direct", action="store_true", help="wait directly for PMOSRAM READY 2 without the stage-2 menu handshake")
     args = parser.parse_args()
 
     payload = open(args.binary, "rb").read()
@@ -180,12 +168,16 @@ def main() -> int:
     old = configure(fd, args.baud)
     link = SerialLink(fd)
     try:
-        if args.legacy_direct:
-            print("Reset or power-cycle the target; waiting for PMOSRAM READY 2...")
-            link.wait_for(("PMOSRAM READY 2",), args.ready_timeout)
-        else:
-            print("Reset or power-cycle the target; entering stage-2 UART RAM-loader option 1...")
-            enter_boot_menu(link, args.ready_timeout)
+        print("Reset or power-cycle the target; waiting for the stage-1 menu probe...")
+        line = link.wait_for(("PMOSMENU PROBE", "PMOSRAM READY 2"), args.ready_timeout)
+        if line.startswith("PMOSMENU PROBE"):
+            # The first byte only interrupts the boot window.  A separate
+            # explicit menu selection prevents random UART noise from choosing
+            # a destructive or blocking path.
+            link.write_all(b"\n")
+            link.wait_for(("PMOSMENU SELECT",), 5.0)
+            link.write_all(b"1\n")
+            link.wait_for(("PMOSRAM READY 2",), 5.0)
         link.write_all(header)
         link.wait_for(("PMOSRAM HEADER-ACK",), 5.0)
         verified: str | None = None

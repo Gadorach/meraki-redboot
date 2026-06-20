@@ -1,10 +1,23 @@
-Release validation requirements:
-- exact GNU GCC 4.7.3 and binutils 2.23.2 toolchain identity
-- stackless pre-DDR initialization and assembly-only flash-stage UART control
-- fixed-RAM code/data/recovery section bounds and in-stage direct calls
-- embedded Luton26 and Jaguar1 recovery symbols, markers, and digests
-- explicit 3-second menu trigger plus 5-second option timeout
-- structured PASS/WARN/FAIL/SKIP image diagnostics
-- historical 32-byte rounded copy in non-strict size profiles
-- final dual-copy 256 KiB wrapper validation
-- source, protocol, sender, and structural test suites
+postmerkOS VCore-III LinuxLoader validation
+
+Current validation targets:
+- Python source, policy, UART protocol, and smoke-payload contract tests
+- Clang MIPS32r2 structural builds for strict, development, and permissive profiles
+- Data-free pre-DDR stage validation: no stack, C calls/J-format jumps, text relocations, data, literals, GOT, BSS, or unresolved helpers
+- Compiler-local jump normalization tests that preserve function returns
+- Fixed-RAM UART stage-1 validation: exact entry, bounded extent, no runtime relocations, unresolved symbols, GOT, dynamic state, or BSS
+- Explicit four-byte stage-1 binary padding before the word-copy embedding path
+- Permanent stage-1 SPIM kernel continuation and fallback-policy source contracts
+- Byte equality between validated uart-stage1.bin and both embedded loader copies
+- Exact 256 KiB wrapper, active/fallback geometry, and policy-marker validation
+- Luton26 and Jaguar1 recovery payload structural builds
+- Fixed-address non-destructive UART smoke-payload validation
+- GCC 4.7.3 reference cross-build of all profiles as a secondary code-generation oracle
+
+Run: make test
+Build smoke test: make uart-smoke-test
+
+Hardware acceptance remains required for the GCC 10 image, permanent stage-1
+flash-kernel continuation, and UART executable upload path.
+
+Current development validation also covers the two-step stage menu, buffered-input drain, non-executable embedded recovery images, platform-specific chainloading, persistent flash-failure recovery, and exact-length legacy kernel copies.

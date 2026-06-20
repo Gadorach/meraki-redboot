@@ -11,11 +11,14 @@ artifacts/recovery-luton26.bin
 artifacts/recovery-jaguar1.bin
 ```
 
-Each binary has a descriptor JSON and SHA-256 sidecar. The descriptor binds:
+Each binary is loaded and entered at `0x81000000`. The linker guarantees that
+`_start` is the first flattened byte. Each binary has a descriptor JSON and
+SHA-256 sidecar. The descriptor binds:
 
 - protocol version;
 - SoC family and family ID;
 - SPI software-mode register address;
+- load and entry addresses;
 - exact accepted model list;
 - 16 MiB flash geometry;
 - accepted JEDEC IDs;

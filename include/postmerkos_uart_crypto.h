@@ -1,6 +1,16 @@
 #ifndef POSTMERKOS_UART_CRYPTO_H
 #define POSTMERKOS_UART_CRYPTO_H
 
+/* The relocatable first-stage loader overrides these macros so every helper is
+ * folded into its single C entry point and constant tables live in GP-relative
+ * small data. Fixed-address recovery programs retain ordinary static helpers. */
+#ifndef PMOS_ALWAYS_INLINE
+#define PMOS_ALWAYS_INLINE static inline
+#endif
+#ifndef PMOS_CONST_DATA
+#define PMOS_CONST_DATA
+#endif
+
 typedef unsigned char pmos_u8;
 typedef unsigned int pmos_u32;
 
@@ -12,12 +22,12 @@ typedef struct {
     pmos_u32 block_used;
 } pmos_sha256_ctx;
 
-static pmos_u32 pmos_rotr32(pmos_u32 value, unsigned int shift)
+PMOS_ALWAYS_INLINE pmos_u32 pmos_rotr32(pmos_u32 value, unsigned int shift)
 {
     return (value >> shift) | (value << (32u - shift));
 }
 
-static pmos_u32 pmos_crc32_update(pmos_u32 crc, const pmos_u8 *data, pmos_u32 length)
+PMOS_ALWAYS_INLINE pmos_u32 pmos_crc32_update(pmos_u32 crc, const pmos_u8 *data, pmos_u32 length)
 {
     pmos_u32 i;
     while (length--) {
@@ -28,12 +38,12 @@ static pmos_u32 pmos_crc32_update(pmos_u32 crc, const pmos_u8 *data, pmos_u32 le
     return crc;
 }
 
-static pmos_u32 pmos_crc32(const pmos_u8 *data, pmos_u32 length)
+PMOS_ALWAYS_INLINE pmos_u32 pmos_crc32(const pmos_u8 *data, pmos_u32 length)
 {
     return ~pmos_crc32_update(0xffffffffu, data, length);
 }
 
-static const pmos_u32 pmos_sha256_k[64] = {
+static const pmos_u32 pmos_sha256_k[64] PMOS_CONST_DATA = {
     0x428a2f98u,0x71374491u,0xb5c0fbcfu,0xe9b5dba5u,
     0x3956c25bu,0x59f111f1u,0x923f82a4u,0xab1c5ed5u,
     0xd807aa98u,0x12835b01u,0x243185beu,0x550c7dc3u,
@@ -52,7 +62,7 @@ static const pmos_u32 pmos_sha256_k[64] = {
     0x90befffau,0xa4506cebu,0xbef9a3f7u,0xc67178f2u
 };
 
-static void pmos_sha256_transform(pmos_sha256_ctx *ctx, const pmos_u8 block[64])
+PMOS_ALWAYS_INLINE void pmos_sha256_transform(pmos_sha256_ctx *ctx, const pmos_u8 block[64])
 {
     pmos_u32 w[64];
     pmos_u32 a,b,c,d,e,f,g,h,t1,t2,s0,s1,ch,maj;
@@ -84,7 +94,7 @@ static void pmos_sha256_transform(pmos_sha256_ctx *ctx, const pmos_u8 block[64])
     ctx->state[4]+=e; ctx->state[5]+=f; ctx->state[6]+=g; ctx->state[7]+=h;
 }
 
-static void pmos_sha256_init(pmos_sha256_ctx *ctx)
+PMOS_ALWAYS_INLINE void pmos_sha256_init(pmos_sha256_ctx *ctx)
 {
     ctx->state[0]=0x6a09e667u; ctx->state[1]=0xbb67ae85u;
     ctx->state[2]=0x3c6ef372u; ctx->state[3]=0xa54ff53au;
@@ -93,7 +103,7 @@ static void pmos_sha256_init(pmos_sha256_ctx *ctx)
     ctx->bit_count_low=0u; ctx->bit_count_high=0u; ctx->block_used=0u;
 }
 
-static void pmos_sha256_add_bits(pmos_sha256_ctx *ctx, pmos_u32 bytes)
+PMOS_ALWAYS_INLINE void pmos_sha256_add_bits(pmos_sha256_ctx *ctx, pmos_u32 bytes)
 {
     pmos_u32 old = ctx->bit_count_low;
     pmos_u32 bits = bytes << 3;
@@ -102,7 +112,7 @@ static void pmos_sha256_add_bits(pmos_sha256_ctx *ctx, pmos_u32 bytes)
     ctx->bit_count_high += bytes >> 29;
 }
 
-static void pmos_sha256_update(pmos_sha256_ctx *ctx, const pmos_u8 *data, pmos_u32 length)
+PMOS_ALWAYS_INLINE void pmos_sha256_update(pmos_sha256_ctx *ctx, const pmos_u8 *data, pmos_u32 length)
 {
     pmos_u32 take, i;
     pmos_sha256_add_bits(ctx, length);
@@ -120,7 +130,7 @@ static void pmos_sha256_update(pmos_sha256_ctx *ctx, const pmos_u8 *data, pmos_u
     }
 }
 
-static void pmos_sha256_final(pmos_sha256_ctx *ctx, pmos_u8 out[32])
+PMOS_ALWAYS_INLINE void pmos_sha256_final(pmos_sha256_ctx *ctx, pmos_u8 out[32])
 {
     pmos_u32 i;
     ctx->block[ctx->block_used++] = 0x80u;
@@ -147,7 +157,7 @@ static void pmos_sha256_final(pmos_sha256_ctx *ctx, pmos_u8 out[32])
     }
 }
 
-static int pmos_digest_equal(const pmos_u8 *a, const pmos_u8 *b, pmos_u32 length)
+PMOS_ALWAYS_INLINE int pmos_digest_equal(const pmos_u8 *a, const pmos_u8 *b, pmos_u32 length)
 {
     pmos_u8 difference = 0u;
     pmos_u32 i;

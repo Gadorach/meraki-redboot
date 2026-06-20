@@ -30,6 +30,16 @@
 #include <asm/r4kcache.h>
 #include <asm/cacheops.h>
 
+#ifndef LOADER_ALWAYS_INLINE
+#define LOADER_ALWAYS_INLINE static inline __attribute__((always_inline))
+#endif
+#ifndef LOADER_SMALL_DATA
+#define LOADER_SMALL_DATA __attribute__((section(".sdata")))
+#endif
+#ifndef LOADER_STAGE_ENTRY
+#define LOADER_STAGE_ENTRY __attribute__((noinline, used, externally_visible, nomips16))
+#endif
+
 #ifndef MAX
 #define MAX(x,y) ((x) > (y) ? (x) : (y))
 #endif
@@ -42,18 +52,6 @@ enum {
 
 #define FALSE 0
 #define TRUE 1
-
-/*
- * No writable stack exists while the SoC and DDR controller are being
- * initialized.  GCC 4.7.3 must therefore fold the complete reset-time C
- * call graph into init_system_<soc>() rather than emitting normal calls and
- * an O32 stack frame.  The matching Makefile flags make s0-s7 call-clobbered
- * only for these two reset-time translation units; the post-DDR UART loader
- * and recovery programs keep the normal ABI.
- */
-#ifndef LOADER_ALWAYS_INLINE
-#define LOADER_ALWAYS_INLINE static inline __attribute__((always_inline))
-#endif
 
 #ifdef MIPS_VCOREIII_MEMORY_16BIT
 #define VC3_MPAR_BURST_LENGTH 4 // in DDR2 16-bit mode, use burstlen 4
@@ -158,14 +156,115 @@ struct _uart_ptr {
 #define UART_BASE ((struct _uart_ptr *)(0x70100000))
 #define BAUD_RATE (115200)
 
-static const u_int32_t clock_speed[] =
-  { 625000, 312500, 500000, 277770, 500000, 250000, 416660, 227270,
-    416660, 208330, 357140, 192300, 357140, 178570, 312500, 166600 };
+/* GCC 10 early-init rule: C stages must not allocate or address any data.
+ * The flash dispatcher owns all diagnostic strings and emits them through its
+ * runtime-base-relative assembly UART routine.  This immediate selector is the
+ * data-free equivalent of the original 16-entry clock table. */
+LOADER_ALWAYS_INLINE u_int32_t
+clock_speed_khz(u_int32_t divider)
+{
+    u_int32_t speed;
+    u_int32_t candidate;
+    u_int32_t compare;
+    u_int32_t selected = divider & 0xfU;
 
-#define ANNOUNCE_LITERAL(str) do { static char strptr[] = {str}; uart_puts(strptr); } while (0);
-#define ANNOUNCE_PROGRESS() do { uart_puts(__func__); } while (0);
-#define ANNOUNCE_OK() ANNOUNCE_LITERAL(" ok\n")
+    /*
+     * Keep this selector completely local to the instruction stream.  GCC
+     * 4.7 and GCC 10 both lower a C switch/table here into absolute jumps or
+     * read-only data, neither of which is valid while the flash loader is
+     * executing from an arbitrary active/fallback copy.  movz performs the
+     * same 16-way selection using only immediate values and registers.
+     */
+    asm volatile(
+        "li     %[speed], 166600\n\t"
 
+        "move   %[compare], %[selected]\n\t"
+        "li     %[candidate], 625000\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 1\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 312500\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 2\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 500000\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 3\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 277770\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 4\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 500000\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 5\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 250000\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 6\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 416660\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 7\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 227270\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 8\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 416660\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 9\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 208330\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 10\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 357140\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 11\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 192300\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 12\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 357140\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 13\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 178570\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+
+        "li     %[compare], 14\n\t"
+        "xor    %[compare], %[selected], %[compare]\n\t"
+        "li     %[candidate], 312500\n\t"
+        "movz   %[speed], %[candidate], %[compare]\n\t"
+        : [speed] "=&r" (speed),
+          [candidate] "=&r" (candidate),
+          [compare] "=&r" (compare)
+        : [selected] "r" (selected));
+
+    return speed;
+}
+
+/* Diagnostics are emitted by head.S between leaf-stage calls. */
+#define ANNOUNCE_LITERAL(str) do { } while (0)
+#define ANNOUNCE_PROGRESS(name) do { } while (0)
+#define ANNOUNCE_OK() do { } while (0)
+
+LOADER_ALWAYS_INLINE u_int32_t init_board(void);
 
 /*
  * check_chip_id - Verify we are on the right hardware
@@ -199,12 +298,12 @@ get_chip_id(void)
 LOADER_ALWAYS_INLINE void
 init_uart(void)
 {
-    register int cpu_clock;
-    register uint16_t divisor;
+    int cpu_clock;
+    uint16_t divisor;
 
-    cpu_clock = clock_speed
-      [VTSS_X_MACRO_CTRL_PLL5G_CFG_PLL5G_CFG0_CPU_CLK_DIV
-       (VTSS_MACRO_CTRL_PLL5G_CFG_PLL5G_CFG0)];
+    cpu_clock = clock_speed_khz(
+      VTSS_X_MACRO_CTRL_PLL5G_CFG_PLL5G_CFG0_CPU_CLK_DIV
+       (VTSS_MACRO_CTRL_PLL5G_CFG_PLL5G_CFG0));
 
     divisor = ((cpu_clock*1000)/2)/(BAUD_RATE*16);
 
@@ -263,7 +362,7 @@ uart_puts(const char *str)
 LOADER_ALWAYS_INLINE void
 init_memctl(void)
 {
-    ANNOUNCE_PROGRESS();
+    ANNOUNCE_PROGRESS("init_memctl");
 
     /* Drop sys ctl memory controller is forced reset */
     VTSS_ICPU_CFG_CPU_SYSTEM_CTRL_RESET &= ~VTSS_F_ICPU_CFG_CPU_SYSTEM_CTRL_RESET_MEM_RST_FORCE;
@@ -341,7 +440,7 @@ init_memctl(void)
 LOADER_ALWAYS_INLINE void
 wait_memctl(void)
 {
-    ANNOUNCE_PROGRESS();
+    ANNOUNCE_PROGRESS("wait_memctl");
 
     /* Now, rip it! */
     VTSS_ICPU_CFG_MEMCTRL_MEMCTRL_CTRL = VTSS_F_ICPU_CFG_MEMCTRL_MEMCTRL_CTRL_INITIALIZE;
@@ -363,7 +462,7 @@ wait_memctl(void)
 LOADER_ALWAYS_INLINE void
 set_dly(u_int8_t byte_lane, u_int32_t dly)
 {
-    register volatile unsigned long *reg = ADDR_DQS_DLY(byte_lane);
+    volatile unsigned long *reg = ADDR_DQS_DLY(byte_lane);
     u_int32_t r = *reg;
     r &= ~VTSS_M_ICPU_CFG_MEMCTRL_MEMCTRL_DQS_DLY_DQS_DLY;
     *reg = r | VTSS_F_ICPU_CFG_MEMCTRL_MEMCTRL_DQS_DLY_DQS_DLY(dly);
@@ -372,9 +471,9 @@ set_dly(u_int8_t byte_lane, u_int32_t dly)
 LOADER_ALWAYS_INLINE bool
 adjust_dly(u_int8_t byte_lane, int adjust)
 {
-    register volatile unsigned long *reg = ADDR_DQS_DLY(byte_lane);
-    register u_int32_t r   = *reg;
-    register u_int32_t dly = VTSS_X_ICPU_CFG_MEMCTRL_MEMCTRL_DQS_DLY_DQS_DLY(r);
+    volatile unsigned long *reg = ADDR_DQS_DLY(byte_lane);
+    u_int32_t r   = *reg;
+    u_int32_t dly = VTSS_X_ICPU_CFG_MEMCTRL_MEMCTRL_DQS_DLY_DQS_DLY(r);
     dly += adjust;
     if(dly < 31) {
         r &= ~VTSS_M_ICPU_CFG_MEMCTRL_MEMCTRL_DQS_DLY_DQS_DLY;
@@ -387,9 +486,9 @@ adjust_dly(u_int8_t byte_lane, int adjust)
 LOADER_ALWAYS_INLINE int
 lookfor_and_incr(u_int8_t byte)
 {
-    register volatile u_int8_t *ram = (volatile u_int8_t *) VTSS_DDR_TO;
+    volatile u_int8_t *ram = (volatile u_int8_t *) VTSS_DDR_TO;
 #ifdef MIPS_VCOREIII_MEMORY_16BIT
-    register u_int8_t b0 = ram[0], b1 = ram[1];
+    u_int8_t b0 = ram[0], b1 = ram[1];
 
     if(b0 != byte &&
        !adjust_dly(0, 1))
@@ -399,7 +498,7 @@ lookfor_and_incr(u_int8_t byte)
         return DDR_TRAIN_ERROR;
     return ((b0 == byte) && (b1 == byte)) ? DDR_TRAIN_OK : DDR_TRAIN_CONTINUE;
 #else
-    register u_int8_t b0 = ram[0];
+    u_int8_t b0 = ram[0];
 
     if(b0 != byte &&
        !adjust_dly(0, 1))
@@ -411,7 +510,7 @@ lookfor_and_incr(u_int8_t byte)
 LOADER_ALWAYS_INLINE int
 train_bytelane(void)
 {
-    register int res;
+    int res;
 #ifdef MIPS_VCOREIII_MEMORY_16BIT
     ((volatile u_int32_t *)VTSS_DDR_TO)[0] = 0x0000FFFF;
     ((volatile u_int32_t *)VTSS_DDR_TO)[1] = 0x00000000;
@@ -451,8 +550,8 @@ reset_memory_fifo(void)
 LOADER_ALWAYS_INLINE bool
 test_memory(void)
 {
-    register volatile u_int32_t *ram = (volatile u_int32_t *)VTSS_DDR_TO;
-    register int count;
+    volatile u_int32_t *ram = (volatile u_int32_t *)VTSS_DDR_TO;
+    int count;
 
     ram[0] = 0;
     ram[1] = ~0;
@@ -468,28 +567,46 @@ test_memory(void)
     return TRUE;
 }
 
-LOADER_ALWAYS_INLINE void
-init_memory_subsystem(void)
+LOADER_ALWAYS_INLINE bool
+memory_boot_mode_enabled(void)
 {
-    if (!(VTSS_ICPU_CFG_CPU_SYSTEM_CTRL_GENERAL_CTRL &
-	  VTSS_F_ICPU_CFG_CPU_SYSTEM_CTRL_GENERAL_CTRL_BOOT_MODE_ENA))
-      return;			/* Don't do if we are not in boot mode */
+    return (VTSS_ICPU_CFG_CPU_SYSTEM_CTRL_GENERAL_CTRL &
+            VTSS_F_ICPU_CFG_CPU_SYSTEM_CTRL_GENERAL_CTRL_BOOT_MODE_ENA) != 0;
+}
 
-    init_memctl();		/* Initialize the memory controller */
-    wait_memctl();		/* Wait for it to be ready */
+LOADER_ALWAYS_INLINE u_int32_t
+init_memory_controller_config_stage(void)
+{
+    if (!memory_boot_mode_enabled())
+        return 0U;
+    init_memctl();
+    return 1U;
+}
 
-    // To do: Should flash a LED while doing this to notice when boards
-    // have memory issues.
+LOADER_ALWAYS_INLINE u_int32_t
+wait_memory_controller_stage(void)
+{
+    if (!memory_boot_mode_enabled())
+        return 0U;
+    wait_memctl();
+    return 1U;
+}
 
-    ANNOUNCE_LITERAL("Training DRAM");
+LOADER_ALWAYS_INLINE u_int32_t
+train_memory_stage(void)
+{
+    u_int32_t retries = 0U;
+    if (!memory_boot_mode_enabled())
+        return 0U;
+
+    /* Preserve the original retry-until-stable DDR training policy. */
     while (TRUE) {
-        if ((train_bytelane() == DDR_TRAIN_OK) && /* Train the byte lanes */
-	    test_memory())
-	    break;
-	ANNOUNCE_LITERAL(" retry");
-	reset_memory_fifo();	/* Failed, reset memory FIFO */
+        if ((train_bytelane() == DDR_TRAIN_OK) && test_memory())
+            break;
+        retries++;
+        reset_memory_fifo();
     }
-    ANNOUNCE_OK();
+    return retries;
 }
 
 /*
@@ -499,7 +616,7 @@ init_memory_subsystem(void)
 LOADER_ALWAYS_INLINE void
 init_irq(void)
 {
-    ANNOUNCE_PROGRESS();
+    ANNOUNCE_PROGRESS("init_irq");
 
     /* Disable all IRQs (to IRQ0) */
     VTSS_ICPU_CFG_INTR_INTR_ENA = 0;
@@ -534,7 +651,7 @@ LOADER_ALWAYS_INLINE void
 create_tlb(int index, u_int32_t offset, u_int32_t size,
            u_int32_t tlb_attrib1, u_int32_t tlb_attrib2)
 {
-    register u_int32_t tlb_mask, tlb_lo0, tlb_lo1;
+    u_int32_t tlb_mask, tlb_lo0, tlb_lo1;
 
     tlb_mask  = ((size >> 12) - 1) << PAGEMASK_SHIFT;
     tlb_lo0 = tlb_attrib1 | ( offset              >> TLB_LO_SHIFT);
@@ -547,7 +664,7 @@ create_tlb(int index, u_int32_t offset, u_int32_t size,
 LOADER_ALWAYS_INLINE void
 invalidate_tlbs(void)
 {
-    register int i, max;
+    int i, max;
 
     max = get_tlb_count();
     for(i = 0; i < max; i++)
@@ -576,7 +693,7 @@ init_io_mapping(void)
 LOADER_ALWAYS_INLINE void
 init_tlb(void)
 {
-    register uint32_t gp;
+    uint32_t gp;
 
     asm ("move %0, $gp" : "=r" (gp));
     if ((gp & 0xf0000000) != 0x40000000) {
@@ -588,7 +705,7 @@ init_tlb(void)
 LOADER_ALWAYS_INLINE void
 init_pll(void)
 {
-    ANNOUNCE_PROGRESS();
+    ANNOUNCE_PROGRESS("init_pll");
 
     /* Wait for PLL to be locked */
 
@@ -623,7 +740,7 @@ init_pll(void)
 LOADER_ALWAYS_INLINE void
 init_spi(void)
 {
-    ANNOUNCE_PROGRESS();
+    ANNOUNCE_PROGRESS("init_spi");
 
     /* Set Fast reads, desel 0x19 + div ~ 33-41Mhz */
     VTSS_ICPU_CFG_SPI_MST_SPI_MST_CFG =
@@ -637,9 +754,9 @@ init_spi(void)
 LOADER_ALWAYS_INLINE void
 init_dram_uncached(u_int32_t *uncached_ram, u_int32_t cache_size)
 {
-    register u_int32_t *addr;
+    u_int32_t *addr;
 
-    ANNOUNCE_PROGRESS();
+    ANNOUNCE_PROGRESS("init_dram_uncached");
 
     for (addr = uncached_ram; addr < uncached_ram + cache_size; addr += 16) {
 	addr[0] = 0;
@@ -667,9 +784,9 @@ init_dram_uncached(u_int32_t *uncached_ram, u_int32_t cache_size)
 LOADER_ALWAYS_INLINE void
 init_icache(u_int32_t *cached_ram, u_int32_t cache_size, u_int32_t line_size)
 {
-    register u_int32_t *addr;
+    u_int32_t *addr;
 
-    ANNOUNCE_PROGRESS();
+    ANNOUNCE_PROGRESS("init_icache");
 
     write_c0_taglo(0);	     /* Ensure valid bit clear and parity consistent */
 
@@ -685,10 +802,10 @@ init_icache(u_int32_t *cached_ram, u_int32_t cache_size, u_int32_t line_size)
 LOADER_ALWAYS_INLINE void
 init_dcache(u_int32_t *cached_ram, u_int32_t cache_size, u_int32_t line_size)
 {
-    register u_int32_t *addr;
-    register u_int32_t dummy;
+    u_int32_t *addr;
+    u_int32_t dummy;
 
-    ANNOUNCE_PROGRESS();
+    ANNOUNCE_PROGRESS("init_dcache");
 
     write_c0_taglo(0);	     /* Ensure valid bit clear and parity consistent */
 
@@ -714,7 +831,7 @@ enable_caches(void)
 {
     u_int32_t config;
 
-    ANNOUNCE_PROGRESS();
+    ANNOUNCE_PROGRESS("enable_caches");
 
     config = read_c0_config();
     config = (config & ~CONF_CM_CMASK) | CONF_CM_CACHABLE_NONCOHERENT;
@@ -724,15 +841,34 @@ enable_caches(void)
 }
 
 LOADER_ALWAYS_INLINE void
-init_caches(void)
+init_cache_prepare_stage(void)
 {
     init_dram_uncached((u_int32_t *)VTSS_DDR_TO, 0x8000);
     create_tlb(3, VTSS_DDR_TO, 256 << 20, MMU_REGIO_RW_C, MMU_REGIO_RW_C);
-    init_icache((u_int32_t *)VTSS_DDR_TO, 0x8000, 32/(sizeof (u_int32_t)));
-    init_dcache((u_int32_t *)VTSS_DDR_TO, 0x8000, 32/(sizeof (u_int32_t)));
-    enable_caches();
-    create_tlb(3, VTSS_DDR_TO, 256 << 20, MMU_REGIO_WRITE_ACC, MMU_REGIO_WRITE_ACC);
 }
+
+LOADER_ALWAYS_INLINE void
+init_icache_stage(void)
+{
+    init_icache((u_int32_t *)VTSS_DDR_TO, 0x8000,
+                32 / (sizeof(u_int32_t)));
+}
+
+LOADER_ALWAYS_INLINE void
+init_dcache_stage(void)
+{
+    init_dcache((u_int32_t *)VTSS_DDR_TO, 0x8000,
+                32 / (sizeof(u_int32_t)));
+}
+
+LOADER_ALWAYS_INLINE void
+init_cache_enable_stage(void)
+{
+    enable_caches();
+    create_tlb(3, VTSS_DDR_TO, 256 << 20,
+               MMU_REGIO_WRITE_ACC, MMU_REGIO_WRITE_ACC);
+}
+
 
 LOADER_ALWAYS_INLINE int32_t
 read_mii(u_int16_t controller, u_int16_t phy_addr, u_int16_t reg_addr)
@@ -798,26 +934,72 @@ write_mii(u_int16_t controller, u_int16_t phy_addr, u_int16_t reg_addr,
 }
 
 /*
- * Expand the complete initialization sequence in the platform entry point.
- * The expansion occurs after init_board() has been defined, allowing GCC
- * 4.7.3 to honor the always_inline contract for every pre-DDR helper.
+ * GCC 10 port: assembly orchestrates small pre-DDR leaf stages.  This limits
+ * register pressure and lets the validator prove each translation unit is
+ * stackless, call-free, and runtime-base-relative without changing the
+ * original hardware-operation order.
  */
-#define LOADER_INIT_SYSTEM_BODY() do {                                      \
-    init_tlb();                 /* Must be first: map I/O space. */          \
-    if (!check_chip_id())                                                   \
-        return NULL;                                                        \
-    init_gpio();                                                            \
-    init_uart();                                                            \
-    ANNOUNCE_LITERAL("LinuxLoader built " __DATE__ " " __TIME__ "\n");    \
-    init_pll();                                                             \
-    init_uart();                                                            \
-    ANNOUNCE_OK();                                                          \
-    init_spi();                                                             \
-    init_memory_subsystem();                                                \
-    init_irq();                                                             \
-    init_caches();                                                          \
-    init_pi();                                                              \
-    init_board();                                                           \
-    ANNOUNCE_LITERAL("Low level initialization complete, exiting boot mode\n"); \
-    return (u_int32_t *)&VTSS_ICPU_CFG_CPU_SYSTEM_CTRL_GENERAL_CTRL;        \
-} while (0)
+#define DEFINE_LOADER_INIT_STAGES(prefix)                                      \
+LOADER_STAGE_ENTRY u_int32_t prefix##_stage_probe(void)                         \
+{                                                                               \
+    init_tlb();                                                                 \
+    return check_chip_id() ? 1U : 0U;                                           \
+}                                                                               \
+LOADER_STAGE_ENTRY void prefix##_stage_console(void)                            \
+{                                                                               \
+    init_gpio();                                                                \
+    init_uart();                                                                \
+}                                                                               \
+LOADER_STAGE_ENTRY void prefix##_stage_pll(void)                                \
+{                                                                               \
+    init_pll();                                                                 \
+    init_uart();                                                                \
+}                                                                               \
+LOADER_STAGE_ENTRY void prefix##_stage_spi(void)                                \
+{                                                                               \
+    init_spi();                                                                 \
+}                                                                               \
+LOADER_STAGE_ENTRY u_int32_t prefix##_stage_memctl_config(void)                 \
+{                                                                               \
+    return init_memory_controller_config_stage();                               \
+}                                                                               \
+LOADER_STAGE_ENTRY u_int32_t prefix##_stage_memctl_wait(void)                   \
+{                                                                               \
+    return wait_memory_controller_stage();                                      \
+}                                                                               \
+LOADER_STAGE_ENTRY u_int32_t prefix##_stage_memtrain(void)                      \
+{                                                                               \
+    return train_memory_stage();                                                \
+}                                                                               \
+LOADER_STAGE_ENTRY void prefix##_stage_irq(void)                                \
+{                                                                               \
+    init_irq();                                                                 \
+}                                                                               \
+LOADER_STAGE_ENTRY void prefix##_stage_cache_prepare(void)                      \
+{                                                                               \
+    init_cache_prepare_stage();                                                 \
+}                                                                               \
+LOADER_STAGE_ENTRY void prefix##_stage_icache(void)                             \
+{                                                                               \
+    init_icache_stage();                                                        \
+}                                                                               \
+LOADER_STAGE_ENTRY void prefix##_stage_dcache(void)                             \
+{                                                                               \
+    init_dcache_stage();                                                        \
+}                                                                               \
+LOADER_STAGE_ENTRY void prefix##_stage_cache_enable(void)                       \
+{                                                                               \
+    init_cache_enable_stage();                                                  \
+}                                                                               \
+LOADER_STAGE_ENTRY u_int32_t prefix##_stage_pi(void)                            \
+{                                                                               \
+    return init_pi();                                                           \
+}                                                                               \
+LOADER_STAGE_ENTRY u_int32_t prefix##_stage_board(void)                         \
+{                                                                               \
+    return init_board();                                                        \
+}                                                                               \
+LOADER_STAGE_ENTRY u_int32_t *prefix##_stage_finish(void)                       \
+{                                                                               \
+    return (u_int32_t *)&VTSS_ICPU_CFG_CPU_SYSTEM_CTRL_GENERAL_CTRL;            \
+}

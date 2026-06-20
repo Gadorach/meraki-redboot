@@ -1,179 +1,8 @@
 # Release record
 
-## 0.7.0 — explicit stage-2 menu and embedded platform recovery
-
-- Replaced the automatic UART-header probe with a two-step boot menu. Any byte
-  received during the three-second probe opens the menu, but the trigger byte is
-  discarded and an explicit `1` or `2` must be entered within five seconds.
-- Menu option `1` enters the persistent PMOSRAM executable uploader. Menu option
-  `2` copies and executes the firmware-recovery program matching the detected
-  Luton26 or Jaguar1 SoC.
-- Invalid input or menu timeout continues normal flash-kernel boot, preventing
-  incidental UART noise from indefinitely stopping startup.
-- Embedded both recovery binaries inside the fixed-RAM stage. Fatal flash-kernel
-  validation failures now launch the matching embedded recovery directly rather
-  than jumping to the historical next-flash-region fallback.
-- Retained the dual loader copies in the 256 KiB wrapper; both complete copies,
-  including both recovery payloads, still fit with substantial free space.
-- Kept structured PASS/WARN/FAIL/SKIP diagnostics for flash-kernel and UART
-  image checks, including expected/observed or declared/effective values.
-- Updated the host RAM uploader to trigger the menu and select option `1`
-  automatically; added `tools/uart_boot_menu.py` for manual option selection.
-- Split fixed-stage code, data, and embedded binaries into separate ELF sections
-  so call validation never interprets payload bytes as MIPS instructions.
-- Exact GCC 4.7.3/binutils 2.23.2 development build passes with a 39,952-byte
-  fixed-RAM stage, 54,816-byte loader copy, and 262,144-byte boot region.
-
-## 0.6.1 — historical size rounding and structured image diagnostics
-
-- Changed unaligned SPIM kernel sizes from an unconditional failure into the
-  historical 32-byte rounded-copy behavior for `development`, `permissive`, and
-  non-strict custom profiles. The declared size is rounded up only for transfer,
-  CRC, boundary, overlap, and cache-maintenance calculations.
-- Kept zero size, rounding overflow, hard-slot overflow, invalid load/entry
-  geometry, stack overlap, stage overlap, and strict-profile unaligned size as
-  fail-closed checks.
-- Added structured `PASS`, `WARN`, `FAIL`, and `SKIP` diagnostics with actual
-  compared values for every flash-kernel header, size, address, overlap, copy,
-  CRC, cache, and execution check.
-- Added the same detailed diagnostics to UART executable header validation and
-  final object CRC-32/SHA-256 verification. Per-frame transfer success remains
-  represented by compact ACK lines; retransmission failures now include the
-  expected and observed sequence, CRC, or remaining length.
-- Preserved the protocol-v2 `PMOSRAM VERIFIED` and `PMOSRAM EXEC` markers so
-  existing host senders remain compatible.
-- Fixed the fixed-stage validation recipe so a validator failure piped through
-  `tee` propagates its real exit status instead of allowing the build to continue.
-- Exact GCC 4.7.3/binutils 2.23.2 development build and all structural profiles
-  pass with the expanded diagnostics.
-
-## 0.6.0 — fixed-RAM boot continuation
-
-- Removed the normal return from fixed-RAM stage 1 to relocatable flash code.
-  Hardware reached `PMOSRAM STAGE1 RETURN` but did not continue through the
-  legacy kernel path.
-- Stage 1 now permanently owns the post-UART boot sequence: SPIM header
-  validation, mandatory and legacy size policies, CRC strict/warn/off policy,
-  flash-to-RAM copy, cache maintenance, kernel entry, and fallback-region jump.
-- The flash shim passes the detected SoC family, current payload-header address,
-  next fallback entry, and loader runtime base before transferring control with
-  a non-returning `jr`.
-- Added explicit `PMOSBOOT` serial diagnostics for context, header location,
-  kernel geometry, execution, and failure/fallback reasons.
-- Added stack and fixed-stage overlap rejection before kernel copy.
-- Added assembly helpers that clear kernel argument registers and preserve the
-  original fallback reason convention in `k0`.
-- Updated fixed-stage validation and regression coverage. Exact GCC 4.7.3
-  builds pass strict, development, permissive, and strict-plus-UART profiles.
-
-## 0.5.1 — GNU assembler relocatable-label fix
-
-- Corrected the fixed-RAM stage shim so the two serial marker addresses are
-  formed with explicit `R_MIPS_HI16`/`R_MIPS_LO16` relocations instead of
-  `li register, symbol`. GNU assembler 2.23.2 requires the latter operand to be
-  an absolute assembly-time expression and rejected the v0.5.0 source.
-- Added regression coverage that requires `%hi/%lo` address construction for
-  both `PMOSRAM STAGE1 COPY` and `PMOSRAM STAGE1 RETURN`.
-- Compiled the complete development loader and both recovery payloads with the
-  supplied GCC 4.7.3/binutils 2.23.2 toolchain. The exact legacy build now
-  passes stage validation, flash-loader validation, wrapper generation, and the
-  final 256 KiB image validator.
-- Exact GCC 4.7.3 development output: stage 1 `0x1050` bytes, loader `19048`
-  bytes, boot region `262144` bytes.
-
-## 0.5.0 — fixed-RAM UART stage
-
-- Corrected the first hardware-tested post-initialization failure, where the
-  loader stopped immediately after `Low level initialization complete, exiting
-  boot mode`.
-- Removed ordinary UART C code from the relocatable flash-resident LinuxLoader.
-  GCC 4.7.3 accepted the historical `-fPIC -mno-abicalls` combination but left
-  direct MIPS `J/JAL` targets and absolute literal addresses that did not follow
-  the active/fallback copy's runtime offset.
-- Added a separately linked UART stage-1 executable at fixed uncached address
-  `0xa7f00000`. The flash loader embeds it as data, copies it after DDR and the
-  stack are available, and enters it through an assembly `jalr` shim.
-- Reserved the physical top 1 MiB of the 128 MiB DRAM map for stage 1. UART
-  upload destinations remain below `0x87f00000`; stage 1 uses the uncached KSEG1
-  alias beginning at `0xa7f00000`.
-- Added fixed-stage ELF validation for entry address, size, BSS, dynamic/GOT
-  sections, unresolved symbols, final relocations, and direct MIPS jump/call
-  targets.
-- Strengthened flash-loader validation to reject absolute pre-DDR `J`
-  instructions as well as stack use and call/link instructions.
-- Added serial progress markers `PMOSRAM STAGE1 COPY` and `PMOSRAM STAGE1
-  RETURN` to distinguish flash remap, stage copy/entry, UART timeout, and return
-  failures during hardware testing.
-- Corrected the assembly-to-C O32 call boundary: the shim now reserves the
-  mandatory 16-byte caller argument area and stores its saved `gp`/SoC state
-  above it, preventing GCC stage prologues from overwriting the return context.
-- Added stage-1 ELF, binary, disassembly, validation log, hashes, and load address
-  to the source-local `.work/` outputs and build manifest format v5.
-- Expanded regression coverage for the two-stage execution architecture.
-
-## 0.4.3
-
-- Forced the remaining CP0/TLB compatibility helpers in
-  `include/asm/mipsregs.h` to inline under GCC 4.7.3, eliminating the calls
-  that caused the observed pre-DDR `ra`/`s8` save frame.
-- Moved the pinned toolchain, downloads, source-build logs, objects, ELFs,
-  disassemblies, relocation tables, recovery outputs, and final artifacts into
-  a source-local `.work/` tree.
-- Added automatic import of a verified v0.4.0-v0.4.2 toolchain from the former
-  XDG cache location.
-- Added persistent native/Distrobox build logs and object-level `.cmd`, `.s`,
-  `.dis`, and `.relocs` diagnostics before validation.
-- Added `make work-layout` and `make support-bundle` for easy comparison and
-  sharing of failed or successful builds.
-- Enhanced the code-generation validator to report stack and call/link
-  offenders together.
-
-## 0.4.2
-
-- Corrected GCC 4.7.3 reset-time code generation so the Luton26 and Jaguar1
-  initialization entry points remain stackless before DDR is available.
-- Forced the complete pre-DDR helper graph inline and expanded the common
-  orchestration only after platform-specific helper bodies are visible.
-- Marked `s0`-`s7` call-clobbered only for the two pre-DDR translation units,
-  eliminating O32 callee-save stack traffic without changing post-DDR ABI.
-- Strengthened validation to reject both stack references and nested MIPS
-  call/link instructions in reset-time objects.
-- Added regression coverage for the inline/register contract.
-
-## 0.4.1
-
-- Fixed the Ubuntu 22.04 source-toolchain bootstrap when Binutils 2.23.2
-  recursively attempted to regenerate BFD Info documentation.
-- Added `texinfo`, `bison`, `gawk`, and `m4` to every supported host
-  dependency path.
-- Passes `MAKEINFO=true` as a command-line make variable to all Binutils and
-  GCC build/install stages so recursive makes inherit the override through
-  `MAKEFLAGS`.
-- Added a documented clean retry path for incomplete v0.4.0 toolchains.
-
-## 0.4.0 — pinned GCC 4.7.3 build environment
-
-- Restored LinuxLoader's historical `-mno-abicalls -fPIC -G 65535` C build
-  model instead of attempting to translate it into GCC 10 code generation.
-- Added a checksum-pinned, source-built GNU GCC 4.7.3 and binutils 2.23.2
-  freestanding `mipsel-linux-gnu` toolchain.
-- Added separate native and Ubuntu 22.04 Distrobox toolchain caches.
-- Added exact compiler/linker identity checks and a historical PIC compile
-  probe before release builds.
-- Added a pre-DDR stack-use validator and final ELF relocation/dynamic-linkage
-  checks.
-- Made plain `make all` ask whether to compile through Distrobox.
-- Added noninteractive `BUILD_MODE=native`, `distrobox`, and `auto` modes while
-  preserving `make distrobox` as a compatibility alias.
-- Made the normal build produce the boot region and both UART firmware-recovery
-  payloads.
-- Enabled UART RAM loading by default in the development profile.
-- Corrected malformed `always_inline` declarations and declaration-order
-  warnings inherited from the loader source without changing behavior.
-
-The current source tree implements build-manifest format version 7 and UART
-recovery protocol version 2. Active capabilities are documented in the README
-and `docs/`.
+The current source tree implements boot-region format version 3 and UART
+recovery protocol version 2. Its active capabilities are documented in the
+README and `docs/`.
 
 Development records and prior release notes are maintained under:
 
@@ -182,7 +11,58 @@ Development records and prior release notes are maintained under:
 - `docs/history/boot-region-reconstruction.md`
 - `docs/history/uart-recovery-development.md`
 - `docs/history/validation-notes.md`
-- `docs/history/gcc10-build-corrections.md`
-- `docs/history/gcc10-loader-codegen.md`
-- `docs/history/binutils-bootstrap-v0.4.1.md`
-- `docs/history/uart-fixed-ram-stage-v0.5.0.md`
+
+## 0.7.0 — explicit stage menu and embedded platform recovery
+
+- Added a two-step post-DDR UART menu: any byte interrupts the three-second
+  probe, then a separate explicit `1` or `2` must arrive within five seconds.
+- Drains bytes already buffered behind the interrupt character before accepting
+  a menu choice, preventing a burst of line noise from selecting an option.
+- Added option 1 for the framed PMOSRAM2 executable loader and option 2 for the
+  recovery payload selected from the detected Jaguar1 or Luton26 family.
+- Embedded both separately validated recovery images in a non-executable ELF
+  section; instruction validation is limited to stage code while size, range,
+  byte identity, and SHA-256 checks include both recovery images.
+- Replaced the later 4 MiB flash-chain fallback with a persistent recovery menu
+  after every fatal flash-kernel validation failure. The two identical loader
+  copies inside the 256 KiB wrapper remain.
+- Permanent stage 1 now copies the exact declared kernel byte count, allowing
+  known legacy no-size images with non-32-byte lengths to boot safely. Newly
+  packaged images remain 32-byte padded for compatibility with older loaders.
+- Added menu-selection tooling, manifest metadata, source contracts, and
+  hardware acceptance steps for RAM loading and platform recovery.
+
+## 0.5.0
+
+- Removed the full UART protocol engine from the relocatable flash text after
+  hardware analysis proved its C calls and literals retained link-time flash
+  addresses when the active loader copy was relocated.
+- Added a separately linked fixed-RAM UART stage 1 at `0x80f00000`.
+- Embedded the validated stage-1 binary as inert bytes in both source-built
+  loader copies.
+- Added a source-relative assembly copy loop, D-cache writeback/invalidation,
+  I-cache invalidation, and fixed-address `jalr` entry shim after DDR setup.
+- Reserved stage 1 below the upload window beginning at `0x81000000`.
+- Added fixed-image extent, relocation, unresolved-symbol, BSS, and overlap
+  validation plus byte-for-byte verification of the embedded stage-1 blob.
+- Added standalone stage-1 ELF, binary, map, symbols, disassembly, artifact,
+  checksum, and manifest metadata outputs.
+
+## 0.4.2
+
+- Replaced the CP0 TLB hazard and indexed-write compatibility helpers with
+  statement macros so GCC 10 emits `ehb` and `tlbwi` directly at every
+  pre-DDR call site.
+- Preserved the exact TLB instruction sequence and memory clobbers while
+  eliminating GCC's size-based `-Werror=inline` rejection.
+- Added a regression contract that prohibits reintroducing callable TLB helper
+  functions into the pre-DDR graph.
+
+## 0.4.1
+
+- Declared `loader-codegen-report.txt` as an output derived from `loader.elf`,
+  fixing parallel manifest builds.
+- Made `make` and `make all` automatically route through Distrobox when the
+  host does not provide the GNU MIPS cross-toolchain.
+- Prevented the Distrobox inner build from recursively invoking Distrobox.
+- Made native tool checks stop cleanly after reporting missing executables.

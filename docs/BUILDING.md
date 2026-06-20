@@ -1,102 +1,50 @@
 # Building the standalone loader
 
-## Recommended command
+## Toolchain
 
-```sh
-make all
-```
-
-When attached to an interactive terminal, the build asks whether to use
-Distrobox. Press Enter for Distrobox or answer `n` for a native build.
+The release build uses little-endian MIPS GNU tools:
 
 ```text
-Use Distrobox for compilation? [Y/n]:
+mipsel-linux-gnu-gcc
+mipsel-linux-gnu-ld
+mipsel-linux-gnu-objcopy
+mipsel-linux-gnu-objdump
+mipsel-linux-gnu-nm
 ```
 
-The Distrobox path is recommended on CachyOS and other rolling distributions.
-It creates or reuses an Ubuntu 22.04 container named
-`postmerkos-vcoreiii-gcc473`. The native and Distrobox paths otherwise use the
-same source archives, patches, configuration, validation, and output targets.
+GNU Make, Python 3, `sha256sum`, and `stat` are also required. The loader and
+recovery payloads are freestanding and link without a target libc.
 
-Noninteractive selection:
+The reset-time SoC initialization uses GCC 10 no-ABI, non-PIC, data-free leaf
+stages. Assembly computes each stage address from the active loader base and
+enters it through `jalr`. Compiler-local J-format jumps are normalized to
+PC-relative branches before assembly. Every GNU build rejects pre-DDR stack
+access, C calls/J-format jumps, text relocations, unresolved helpers, data,
+literals, GOT, and BSS before accepting `loader.elf`.
+
+The post-DDR UART engine is a different fixed-address program. It is linked at
+`0xa7f00000`, the uncached KSEG1 alias of the upload-window end. It is embedded
+in the flash loader as data, copied into initialized RAM, synchronized, and
+entered with a permanent tail jump. It runs the UART
+probe and then performs normal SPIM kernel validation/copy/jump itself. This
+stage may use ordinary C calls and the established stack without weakening
+active/fallback loader relocation. See
+[`GCC10-CODEGEN.md`](GCC10-CODEGEN.md).
+
+On CachyOS or another Distrobox host:
 
 ```sh
-make all BUILD_MODE=distrobox
-make all BUILD_MODE=native
-make all BUILD_MODE=auto
+make distrobox
 ```
 
-`BUILD_MODE=auto` selects Distrobox when it is installed and native compilation
-otherwise. `make distrobox` remains a compatibility alias for an explicit
-Distrobox build.
+The default `development` profile includes the UART RAM loader. Disable it for
+an explicitly non-recovery image with `UART_RAMLOADER=0`.
 
-## Pinned cross-toolchain
-
-The release build does not use the host distribution's current MIPS compiler.
-The scripts build and cache a freestanding cross-toolchain from pinned GNU
-release sources:
-
-```text
-GCC:      4.7.3
-binutils: 2.23.2
-target:   mipsel-linux-gnu
-languages: C only
-target libc/headers: none
-```
-
-This preserves the embedded MIPS code-generation model used by the original
-loader source:
-
-```text
--mno-abicalls -fPIC -G 65535
-```
-
-The combination is deliberately compiler-version-sensitive. The build rejects
-an unexpected GCC or binutils version unless
-`ALLOW_UNVERIFIED_TOOLCHAIN=1` is supplied for a deliberate experiment.
-
-First use downloads and verifies the release archives, builds binutils and the
-C compiler into `.work/toolchains/`, and performs a compile probe. Distrobox and
-native installations remain separated by host flavor because their host ABIs
-may differ. A verified v0.4.0-v0.4.2 installation in the former XDG cache is
-automatically copied into `.work/` on first use.
-Full source, checksum, patch, cache, and override details are in
-[`TOOLCHAIN.md`](TOOLCHAIN.md).
-
-Manual setup targets:
+On Debian or Ubuntu:
 
 ```sh
-make deps       # host dependencies plus pinned toolchain
-make toolchain  # pinned toolchain only; host dependencies must exist
-```
-
-Force a clean toolchain rebuild:
-
-```sh
-TOOLCHAIN_REBUILD=1 make toolchain
-```
-
-Keep extracted source/build directories for diagnosis:
-
-```sh
-TOOLCHAIN_KEEP_BUILD=1 make toolchain
-```
-
-## Default build contents
-
-`make all` builds:
-
-1. the selected 256 KiB VCore-III boot region;
-2. its map, symbols, disassemblies, hashes, and manifest;
-3. the Luton26 UART firmware-recovery payload;
-4. the Jaguar1 UART firmware-recovery payload;
-5. when UART recovery is enabled, a fixed-RAM UART stage-1 ELF/binary, its
-   disassembly, validation log, and manifest hashes.
-
-The default `development` profile enables the UART RAM loader. Disable it with:
-
-```sh
-make all VARIANT=development UART_RAMLOADER=0
+./scripts/install-deps.sh
+make -j"$(nproc)" all VARIANT=development
 ```
 
 ## Profiles and geometry
@@ -115,43 +63,52 @@ make all \
   VARIANT=custom \
   CRC_POLICY=warn \
   SIZE_POLICY=hard-only \
-  UART_RAMLOADER=1 \
   PAYLOAD_SLOT_END=0x00300000
 ```
 
 The configuration checker validates policy names, alignment, payload limits,
 slot boundaries, fallback stride, UART staging limits, and timeout values.
 
-## Source-local work tree
-
-All generated files are placed under `.work/`:
-
-```text
-.work/toolchains/                 pinned GCC/binutils installations
-.work/toolchain-build/            source-toolchain build log and optional work trees
-.work/downloads/                  checksum-verified GNU source archives
-.work/build/<variant>/            flash-loader objects, generated assembly, disassembly, relocations, ELFs
-.work/build/<variant>/uart-stage1/ fixed-RAM UART stage ELF, binary, map and inspections
-.work/out/<variant>/              inspection copies and complete disassemblies
-.work/artifacts/                  flashable boot regions, hashes, manifests
-.work/recovery/build/             recovery payload objects and ELFs
-.work/recovery/artifacts/         recovery binaries, hashes, descriptors
-.work/logs/                       complete build and validation logs
-.work/support/                    shareable diagnostic archives
-```
-
-Use:
+## UART-capable build
 
 ```sh
-make work-layout
-make support-bundle
+make all recovery-payloads \
+  VARIANT=development \
+  UART_RAMLOADER=1 \
+  UART_STAGE1_ADDRESS=0xa7f00000 \
+  PAYLOAD_SLOT_END=0x00300000
 ```
 
-`make support-bundle` is safe after a failed build and deliberately excludes
-the large compiler binaries and extracted GNU source trees.
+Outputs include:
 
-The loader manifest records the exact compiler/linker identity, source-built
-toolchain ID, selected policies, geometry, UART limits, and output hashes.
+```text
+artifacts/vcoreiii-linuxloader-development.bin
+artifacts/vcoreiii-linuxloader-development.bin.sha256
+artifacts/vcoreiii-linuxloader-development.bin.manifest.json
+artifacts/vcoreiii-uart-stage1-development.bin
+out/development/uart-stage1-development.elf
+out/development/uart-stage1-development.dis
+payloads/uart-firmware-recovery/artifacts/recovery-luton26.bin
+payloads/uart-firmware-recovery/artifacts/recovery-luton26.descriptor.json
+payloads/uart-firmware-recovery/artifacts/recovery-jaguar1.bin
+payloads/uart-firmware-recovery/artifacts/recovery-jaguar1.descriptor.json
+payloads/uart-smoke-test/artifacts/uart-smoke-test.bin
+```
+
+
+Build the non-destructive RAM execution test separately:
+
+```sh
+make uart-smoke-test
+```
+
+Upload instructions and expected serial output are in
+[`../payloads/uart-smoke-test/README.md`](../payloads/uart-smoke-test/README.md).
+
+The loader manifest records whether UART recovery is compiled in, protocol
+version, timeout values, maximum payload bytes, upload range, fixed stage-1
+address/size/SHA-256, supported SoC families, transport-integrity algorithms,
+and boot-region SHA-256.
 
 ## Validation
 
@@ -162,24 +119,10 @@ make validate VARIANT=development
 make inspect VARIANT=development
 ```
 
-`make test` runs Python contracts, wrapper-fit arithmetic, MIPS32r2 structural
-builds, and Luton26/Jaguar1 recovery-payload structural builds. These structural
-builds do not replace the pinned GCC release build.
-
-Every release build also checks:
-
-- exact GCC 4.7.3 and binutils 2.23.2 identity;
-- successful compilation of the historical PIC/no-ABI probe;
-- mandatory inlining of the CP0/TLB hazard helpers used before DDR;
-- absence of stack-pointer references and nested call/link instructions in the
-  pre-DDR initialization objects;
-- absence of dynamic-loader sections and unresolved symbols;
-- absence of relocations in the final linked flash loader;
-- no ordinary UART C symbol in the relocatable flash loader;
-- fixed UART stage entry at `0xa7f00000`, no BSS/dynamic/GOT state, and all
-  direct stage calls remaining inside its reserved window;
-- entry point at link address zero;
-- dual-copy wrapper fit and exact 256 KiB image size.
+`make test` runs Python contracts, positive and negative code-generation
+validator fixtures, the real wrapper-fit shell expression, freestanding
+MIPS32r2 structural builds with UART enabled, and Luton26/Jaguar1 recovery
+payload builds. The GNU GCC 10 cross-build remains the release artifact path.
 
 ## Kernel payload
 

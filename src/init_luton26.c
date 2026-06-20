@@ -22,12 +22,15 @@
 
 #include <vtss/vtss_luton26_core_regs.h>
 
-#define LOADER_BUILD_VCOREIII_LUTON26 1
-#define EXPECTED_CHIP_ID 0x7427
-
 #ifndef LOADER_ALWAYS_INLINE
 #define LOADER_ALWAYS_INLINE static inline __attribute__((always_inline))
 #endif
+#ifndef LOADER_SMALL_DATA
+#define LOADER_SMALL_DATA __attribute__((section(".sdata")))
+#endif
+
+#define LOADER_BUILD_VCOREIII_LUTON26 1
+#define EXPECTED_CHIP_ID 0x7427
 
 
 #define VTSS_MACRO_CTRL_PLL5G_STATUS_PLL5G_STATUS0  VTSS_IOREG(VTSS_TO_MACRO_CTRL,0x6)
@@ -75,22 +78,22 @@ init_gpio(void)
 					  VTSS_BIT(2) | VTSS_BIT(0));
 }
 
-LOADER_ALWAYS_INLINE void
+LOADER_ALWAYS_INLINE u_int32_t
 init_pi(void)
 {
     /* No PI to deal with */
+    return 1U;
 }
 
 #include "init.h"
 
-LOADER_ALWAYS_INLINE void
+LOADER_ALWAYS_INLINE u_int32_t
 init_board(void)
 {
-    register u_int16_t data;
-    register int32_t result;
-    register int i;
-
-    ANNOUNCE_PROGRESS();
+    u_int16_t data;
+    int32_t result;
+    int i;
+    u_int32_t status = 1U;
 
     data = read_mii(1, 12, 0);	/* Read MII register zero */
     data |= 0x8000;		/* Set SW reset */
@@ -108,7 +111,7 @@ init_board(void)
         }
 
         if (result < 0) {
-            ANNOUNCE_LITERAL(" phy reset failed\n");
+            status = 0U;
         } else {
             write_mii(1, 12, 31, 16);	/* Address GPIO space */
             write_mii(1, 12, 13, 0x0f00); /* Set GPIO13 and GPIO14 as GPIO */
@@ -134,12 +137,8 @@ init_board(void)
 	    VTSS_DEVCPU_GCB_SIO_CTRL_SIO_PORT_CONFIG(i) = 0x249; /* Forced 1 */
     }
 
-    ANNOUNCE_OK();
+    return status;
 }
 
-u_int32_t *
-init_system_luton26(void)
-{
-    LOADER_INIT_SYSTEM_BODY();
-}
+DEFINE_LOADER_INIT_STAGES(init_luton26)
 

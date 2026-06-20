@@ -82,21 +82,6 @@
 #error CONFIG_LEGACY_PAYLOAD_LIMIT must not exceed CONFIG_HARD_PAYLOAD_LIMIT
 #endif
 
-#if defined(CONFIG_UART_RAMLOADER)
-#ifndef UART_STAGE1_FILE
-#error UART_STAGE1_FILE must name the fixed-RAM UART engine binary
-#endif
-#ifndef UART_STAGE1_SIZE
-#error UART_STAGE1_SIZE must be supplied by the build
-#endif
-#ifndef UART_STAGE1_LOAD_ADDR
-#error UART_STAGE1_LOAD_ADDR must be supplied by the build
-#endif
-#if UART_STAGE1_SIZE <= 0
-#error UART_STAGE1_SIZE must be positive
-#endif
-#endif
-
 #define REASON_STARTUP 		0		/* Power up */
 #define REASON_TLB		1		/* TLB exception */
 #define REASON_CACHE		2		/* Cache error */
@@ -107,6 +92,27 @@
 #define REASON_PAYLOAD_ERROR	7		/* Payload declared error */
 
 	.set	noreorder
+
+/* GCC 10 pre-DDR stages are data-free, call-free, no-ABI leaf functions.
+ * Form their runtime address from the relocatable loader base and enter with
+ * jalr.  They do not own or modify $gp. */
+	.macro loader_stage_call symbol
+	lui	t9, %hi(\symbol)
+	addiu	t9, t9, %lo(\symbol)
+	addu	t9, t9, gp
+	jalr	t9
+	 nop
+	.endm
+
+/* All pre-DDR text lives in this assembly object and is addressed as
+ * loader-runtime-base + link-time offset. */
+	.macro loader_notice string_label
+	lui	a0, %hi(\string_label)
+	addiu	a0, a0, %lo(\string_label)
+	addu	a0, a0, gp
+	bal	loader_uart_puts
+	 nop
+	.endm
 
 __start:bal	10f		/* Figure out where we are */
 	 nop			/* Keep branch delay slot empty */
@@ -129,22 +135,144 @@ __start:bal	10f		/* Figure out where we are */
 	li	t0, INITIAL_SR	/* Get the initial status */
 	mtc0	t0, CP0_STATUS	/*  and set it */
 	ehb			/* Avoid any hazards */
-	bal	init_system_jaguar1 /* Attempt to initialize system */
-	 move	a0, k0		/* Pass the reason */
-	bnez	v0, 18f		/* It is a Jaguar1-family device */
-	 move	a0, k0		/* Get reason code back */
-
-	bal	init_system_luton26 /* Try Luton26 */
+	/* GCC 10-safe early initialization is split into data-free C leaf stages.
+	 * Assembly owns every diagnostic string and the exact hardware stage order. */
+	loader_stage_call init_jaguar_stage_probe
+	beqz	v0, 18f
 	 nop
-	bnez	v0, 19f		/* It is a Luton26-family device */
-	 li	k0, REASON_INITFAILED /* Set up error code */
-	b	loader_fail	/* Unable to initialize */
-	 nop			/* Just loop */
-
-18:	li	s7, 2		/* UART protocol SoC family: Jaguar1 */
+	loader_stage_call init_jaguar_stage_console
+	loader_notice loader_build_text
+	loader_notice loader_init_pll_text
+	loader_stage_call init_jaguar_stage_pll
+	loader_notice loader_ok_text
+	loader_notice loader_init_spi_text
+	loader_stage_call init_jaguar_stage_spi
+	loader_notice loader_ok_text
+	loader_notice loader_init_memctl_text
+	loader_stage_call init_jaguar_stage_memctl_config
+	loader_notice loader_ok_text
+	loader_notice loader_wait_memctl_text
+	loader_stage_call init_jaguar_stage_memctl_wait
+	loader_notice loader_ok_text
+	loader_notice loader_training_dram_text
+	loader_stage_call init_jaguar_stage_memtrain
+	move	s6, v0
+jaguar_training_retry_print:
+	beqz	s6, jaguar_training_done
+	 nop
+	loader_notice loader_retry_text
+	addiu	s6, s6, -1
+	b	jaguar_training_retry_print
+	 nop
+jaguar_training_done:
+	loader_notice loader_ok_text
+	loader_notice loader_init_irq_text
+	loader_stage_call init_jaguar_stage_irq
+	loader_notice loader_ok_text
+	loader_notice loader_init_dram_uncached_text
+	loader_stage_call init_jaguar_stage_cache_prepare
+	loader_notice loader_ok_text
+	loader_notice loader_init_icache_text
+	loader_stage_call init_jaguar_stage_icache
+	loader_notice loader_ok_text
+	loader_notice loader_init_dcache_text
+	loader_stage_call init_jaguar_stage_dcache
+	loader_notice loader_ok_text
+	loader_notice loader_enable_caches_text
+	loader_stage_call init_jaguar_stage_cache_enable
+	loader_notice loader_ok_text
+	loader_notice loader_init_pi_text
+	loader_stage_call init_jaguar_stage_pi
+	bnez	v0, jaguar_pi_ok
+	 nop
+	loader_notice loader_not_found_text
+	b	jaguar_pi_done
+	 nop
+jaguar_pi_ok:
+	loader_notice loader_ok_text
+jaguar_pi_done:
+	loader_notice loader_init_board_text
+	loader_stage_call init_jaguar_stage_board
+	bnez	v0, jaguar_board_ok
+	 nop
+	loader_notice loader_phy_failed_text
+	b	jaguar_board_done
+	 nop
+jaguar_board_ok:
+	loader_notice loader_ok_text
+jaguar_board_done:
+	loader_stage_call init_jaguar_stage_finish
+	loader_notice loader_low_level_done_text
+	li	s7, 2		/* UART protocol SoC family: Jaguar1 */
 	b	20f
 	 nop
-19:	li	s7, 1		/* UART protocol SoC family: Luton26 */
+
+18:	loader_stage_call init_luton26_stage_probe
+	beqz	v0, 19f
+	 nop
+	loader_stage_call init_luton26_stage_console
+	loader_notice loader_build_text
+	loader_notice loader_init_pll_text
+	loader_stage_call init_luton26_stage_pll
+	loader_notice loader_ok_text
+	loader_notice loader_init_spi_text
+	loader_stage_call init_luton26_stage_spi
+	loader_notice loader_ok_text
+	loader_notice loader_init_memctl_text
+	loader_stage_call init_luton26_stage_memctl_config
+	loader_notice loader_ok_text
+	loader_notice loader_wait_memctl_text
+	loader_stage_call init_luton26_stage_memctl_wait
+	loader_notice loader_ok_text
+	loader_notice loader_training_dram_text
+	loader_stage_call init_luton26_stage_memtrain
+	move	s6, v0
+luton_training_retry_print:
+	beqz	s6, luton_training_done
+	 nop
+	loader_notice loader_retry_text
+	addiu	s6, s6, -1
+	b	luton_training_retry_print
+	 nop
+luton_training_done:
+	loader_notice loader_ok_text
+	loader_notice loader_init_irq_text
+	loader_stage_call init_luton26_stage_irq
+	loader_notice loader_ok_text
+	loader_notice loader_init_dram_uncached_text
+	loader_stage_call init_luton26_stage_cache_prepare
+	loader_notice loader_ok_text
+	loader_notice loader_init_icache_text
+	loader_stage_call init_luton26_stage_icache
+	loader_notice loader_ok_text
+	loader_notice loader_init_dcache_text
+	loader_stage_call init_luton26_stage_dcache
+	loader_notice loader_ok_text
+	loader_notice loader_enable_caches_text
+	loader_stage_call init_luton26_stage_cache_enable
+	loader_notice loader_ok_text
+	loader_notice loader_init_pi_text
+	loader_stage_call init_luton26_stage_pi
+	loader_notice loader_ok_text
+	loader_notice loader_init_board_text
+	loader_stage_call init_luton26_stage_board
+	bnez	v0, luton_board_ok
+	 nop
+	loader_notice loader_phy_failed_text
+	b	luton_board_done
+	 nop
+luton_board_ok:
+	loader_notice loader_ok_text
+luton_board_done:
+	loader_stage_call init_luton26_stage_finish
+	loader_notice loader_low_level_done_text
+	li	s7, 1		/* UART protocol SoC family: Luton26 */
+	b	20f
+	 nop
+
+19:	li	k0, REASON_INITFAILED
+	b	loader_fail
+	 nop
 20:
 	/* Cache is working, RAM is working, SPI Flash is mapped at
 	 * 0x40000000, DRAM is mapped cached at 0x20000000. Still in
@@ -156,7 +284,7 @@ __start:bal	10f		/* Figure out where we are */
 	PTR_LI	sp, STACK_BASE  /* Set up a stack in DRAM */
 	move	fp, sp		/* Set up initial frame pointer */
 	lw	t0, 0(v0)	/* Are we in boot mode? */
-	beqz	t0, 30f		/* No, so continue as we are */
+	beqz	t0, 29f		/* No boot-mode transition is required */
 	 nop
 	bal	boot_mode_trampoline /* Come back at 4xxxxxxx */
 	 nop
@@ -168,60 +296,62 @@ __start:bal	10f		/* Figure out where we are */
 
 	sw	zero, 0(v0)	/* Get ready to take us out of boot mode */
 	lw	zero, 0(v0)	/* Now take us out of boot mode */
-
+29:
 #if defined(CONFIG_UART_RAMLOADER)
-	/*
-	 * The full UART engine is ordinary non-PIC C linked for a reserved,
-	 * uncached RAM address.  Copy it out of this relocatable flash image,
-	 * execute it from RAM, then restore the flash loader's runtime GP.
-	 */
-	lui	a0, %hi(loader_uart_stage1_copy_text)
-	addiu	a0, a0, %lo(loader_uart_stage1_copy_text)
-	add	a0, a0, gp
-	bal	loader_uart_puts
-	 nop
-
-	/* Copy the fixed-RAM boot continuation.  Stage 1 owns all remaining
-	 * boot work: UART upload, flash-kernel validation/copy, and final entry.
-	 * It is entered with jr and is not expected to return to relocatable
-	 * flash code. */
+	/* The UART engine is linked for the uncached top-of-RAM alias, embedded
+	 * as inert bytes in each relocatable flash-loader copy, then copied and
+	 * entered only after DDR, caches, and the stack are operational. */
+	loader_notice loader_uart_stage1_copy_text
 	lui	t0, %hi(uart_stage1_blob_start)
 	addiu	t0, t0, %lo(uart_stage1_blob_start)
-	add	t0, t0, gp		/* Source in the active/fallback flash copy */
-	li	t1, UART_STAGE1_LOAD_ADDR	/* Uncached top-of-RAM destination */
-	li	t2, UART_STAGE1_SIZE
-1:	lbu	t3, 0(t0)
-	sb	t3, 0(t1)
+	addu	t0, t0, gp	/* Runtime source inside active/fallback copy */
+	li	t1, CONFIG_UART_STAGE1_ADDRESS
+	li	t2, CONFIG_UART_STAGE1_SIZE
+	move	t3, t1
+	move	t4, t2
+uart_stage1_copy_loop:
+	lbu	t5, 0(t0)
+	sb	t5, 0(t3)
 	addiu	t0, t0, 1
-	addiu	t1, t1, 1
-	addiu	t2, t2, -1
-	bnez	t2, 1b
+	addiu	t3, t3, 1
+	addiu	t4, t4, -1
+	bgtz	t4, uart_stage1_copy_loop
+	 nop
+
+	/* The default destination is KSEG1 and executes uncached.  A build that
+	 * deliberately selects a cached KSEG0 address receives explicit cache
+	 * maintenance instead. */
+#if ((CONFIG_UART_STAGE1_ADDRESS & 0xe0000000) == 0x80000000)
+	li	t0, CONFIG_UART_STAGE1_ADDRESS
+	addu	t1, t0, t2
+	addiu	t1, t1, 31
+	li	t3, -32
+	and	t0, t0, t3
+	and	t1, t1, t3
+	move	t4, t0
+uart_stage1_dcache_loop:
+	cache	0x15, 0(t4)
+	addiu	t4, t4, 32
+	bne	t4, t1, uart_stage1_dcache_loop
 	 nop
 	sync
+	move	t4, t0
+uart_stage1_icache_loop:
+	cache	0x10, 0(t4)
+	addiu	t4, t4, 32
+	bne	t4, t1, uart_stage1_icache_loop
+	 nop
+#endif
+	sync
+	ehb
 
-	/* Stage arguments:
-	 *   a0 = detected SoC family
-	 *   a1 = SPIM payload header in mapped flash
-	 *   a2 = next fallback-region entry
-	 *   a3 = current loader runtime base (diagnostics)
-	 */
+	/* Permanent handoff: stage 1 owns UART probing and normal flash-kernel
+	 * continuation.  It never returns to the relocatable flash body. */
 	move	a0, s7
-	li	t0, LOADER_SIZE
-	add	a1, gp, t0
-	li	t0, LOADER_MASK
-	and	a1, a1, t0
-	li	t0, REGION_SIZE
-	add	a2, gp, t0
-	li	t0, REGION_MASK
-	and	a2, a2, t0
-	move	a3, gp
-
-	/* If stage 1 unexpectedly returns, resume the legacy loader at its
-	 * explicit continuation label rather than relying on a stale ra. */
-	lui	ra, %hi(loader_kernel_continue)
-	addiu	ra, ra, %lo(loader_kernel_continue)
-	add	ra, ra, gp
-	li	t9, UART_STAGE1_LOAD_ADDR
+	move	a1, gp		/* Runtime loader base for payload/fallback geometry */
+	li	t9, CONFIG_UART_STAGE1_ADDRESS
+	.global loader_uart_stage1_handoff
+loader_uart_stage1_handoff:
 	jr	t9
 	 nop
 #endif
@@ -274,7 +404,7 @@ __start:bal	10f		/* Figure out where we are */
 .endm
 #endif
 
-#if defined(CONFIG_CRC_POLICY_WARN) || defined(CONFIG_SIZE_POLICY_LEGACY_WARN) || defined(CONFIG_UART_RAMLOADER)
+#if defined(CONFIG_CRC_POLICY_WARN) || defined(CONFIG_SIZE_POLICY_LEGACY_WARN)
 /* Print a PIC string through the UART initialized by init_system_*. */
 	.macro loader_warning string_label
 	lui	a0, %hi(\string_label)
@@ -285,7 +415,6 @@ __start:bal	10f		/* Figure out where we are */
 	.endm
 #endif
 
-loader_kernel_continue:
 30:	li	a1, LOADER_SIZE	/* Get loader size */
 	add	a0, a1, gp	/* Round up to payload area */
 	li	a1, LOADER_MASK /* Get loader mask */
@@ -503,9 +632,8 @@ boot_mode_trampoline:
 	jr	ra		/* Continue at 4xxxxxxx */
 	 nop
 
-#if defined(CONFIG_CRC_POLICY_WARN) || defined(CONFIG_SIZE_POLICY_LEGACY_WARN) || defined(CONFIG_UART_RAMLOADER)
 /*
- * Minimal assembly UART writer used by validation warnings and the UART stage shim. The SoC
+ * Minimal assembly UART writer for early-init progress and validation warnings. The SoC
  * initialization path has already configured the UART to 115200 8N1.
  * Clobbers a0 and t6-t9; callers retain live values in saved registers.
  */
@@ -537,6 +665,33 @@ loader_uart_done:
 	jr	ra
 	 nop
 
+loader_build_text:
+	.ascii "LinuxLoader built "
+	.ascii __DATE__
+	.ascii " "
+	.ascii __TIME__
+	.asciz "\n"
+loader_init_pll_text:          .asciz "init_pll"
+loader_init_spi_text:          .asciz "init_spi"
+loader_init_memctl_text:       .asciz "init_memctl"
+loader_wait_memctl_text:       .asciz "wait_memctl"
+loader_training_dram_text:     .asciz "Training DRAM"
+loader_retry_text:             .asciz " retry"
+loader_init_irq_text:          .asciz "init_irq"
+loader_init_dram_uncached_text:.asciz "init_dram_uncached"
+loader_init_icache_text:       .asciz "init_icache"
+loader_init_dcache_text:       .asciz "init_dcache"
+loader_enable_caches_text:     .asciz "enable_caches"
+loader_init_pi_text:           .asciz "init_pi"
+loader_init_board_text:        .asciz "init_board"
+loader_ok_text:                .asciz " ok\n"
+loader_not_found_text:         .asciz " not found\n"
+loader_phy_failed_text:        .asciz " phy reset failed\n"
+loader_low_level_done_text:    .asciz "Low level initialization complete, exiting boot mode\n"
+#if defined(CONFIG_UART_RAMLOADER)
+loader_uart_stage1_copy_text:  .asciz "PMOSRAM STAGE1 COPY\n"
+#endif
+
 #if defined(CONFIG_SIZE_POLICY_LEGACY_WARN)
 loader_size_warning_text:
 	.asciz "WARNING: payload exceeds legacy size threshold; continuing within hard slot limit\n"
@@ -545,12 +700,7 @@ loader_size_warning_text:
 loader_crc_warning_text:
 	.asciz "WARNING: payload CRC mismatch; continuing because CRC policy is warn\n"
 #endif
-#if defined(CONFIG_UART_RAMLOADER)
-loader_uart_stage1_copy_text:
-	.asciz "PMOSRAM STAGE1 COPY\n"
-#endif
 	.align	4
-#endif
 
 #if !defined(CONFIG_CRC_POLICY_OFF)
 crctab:
@@ -608,6 +758,17 @@ crctab:
 	.word 0x2d02ef8d
 #endif /* CRC table */
 
+#if defined(CONFIG_UART_RAMLOADER)
+	/* Fixed-RAM stage-1 image.  These bytes are never executed from flash. */
+	.section .rodata.uart_stage1,"a",@progbits
+	.balign 32
+uart_stage1_blob_start:
+	.incbin UART_STAGE1_FILE
+uart_stage1_blob_end:
+	.balign 32
+	.text
+#endif
+
 	.ascii	"LinuxLoader VCoreIII"
 
 #ifdef CONFIG_VTSS_VCOREIII_JAGUAR
@@ -619,17 +780,5 @@ crctab:
 #endif
 
 	.align	4
-
-#if defined(CONFIG_UART_RAMLOADER)
-	.section .uart_stage1_blob, "a", @progbits
-	.align 4
-	.global uart_stage1_blob_start
-uart_stage1_blob_start:
-	.incbin UART_STAGE1_FILE
-	.global uart_stage1_blob_end
-uart_stage1_blob_end:
-	.align 4
-	.previous
-#endif
 
 .global __start
