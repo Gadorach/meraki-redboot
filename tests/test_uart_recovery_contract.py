@@ -164,6 +164,16 @@ class UartRecoveryContractTests(unittest.TestCase):
         self.assertNotIn('void _start(void)', RECOVERY_SOURCE)
         self.assertIn('void recovery_main(void)', RECOVERY_SOURCE)
 
+    def test_recovery_json_lookup_is_scoped_to_direct_object_members(self) -> None:
+        self.assertIn("direct_object_depth", RECOVERY_SOURCE)
+        self.assertIn("object_depth != direct_object_depth || array_depth != 0u", RECOVERY_SOURCE)
+        self.assertIn("manifest_lookup_contract", (ROOT / "payloads/uart-firmware-recovery/write_descriptor.py").read_text(encoding="utf-8"))
+        # The artifact object intentionally contains a nested kernel SHA before its
+        # own full-image SHA in sorted JSON. The recovery parser must not accept
+        # that nested value when looking up artifact.sha256.
+        self.assertIn('json_object_value(MANIFEST_BASE, header->manifest_size, "artifact"', RECOVERY_SOURCE)
+        self.assertIn('json_string_value(artifact_object, artifact_length, "sha256"', RECOVERY_SOURCE)
+
     def test_recovery_enforces_manifest_flash_and_terminal_contracts(self) -> None:
         for token in (
             "PMOSRECOVERY2;SOC=", "PKG_MAGIC1", "PMOSPKG VERIFIED",

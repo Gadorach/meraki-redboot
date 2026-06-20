@@ -134,6 +134,7 @@ def main() -> int:
                     "load_address": 0x81000000,
                     "entry_address": 0x81000000,
                     "entry_contract": "flat-binary-byte-zero-v1",
+                    "manifest_lookup_contract": "direct-object-members-v1",
                 },
                 "jaguar1": {
                     "path": str(args.recovery_jaguar1_bin),
@@ -142,6 +143,7 @@ def main() -> int:
                     "load_address": 0x81000000,
                     "entry_address": 0x81000000,
                     "entry_contract": "flat-binary-byte-zero-v1",
+                    "manifest_lookup_contract": "direct-object-members-v1",
                 },
             } if uart_enabled else None),
         },

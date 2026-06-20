@@ -47,6 +47,7 @@ def main() -> int:
         "load_address": 0x81000000,
         "entry_address": 0x81000000,
         "entry_contract": "flat-binary-byte-zero-v1",
+        "manifest_lookup_contract": "direct-object-members-v1",
         "binary": {
             "filename": args.binary.name,
             "bytes": len(data),

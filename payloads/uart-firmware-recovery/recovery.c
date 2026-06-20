@@ -375,19 +375,49 @@ static u32 json_skip_ws(const u8 *data, u32 length, u32 position)
 
 static int json_find_value(const u8 *data, u32 length, const char *key, u32 *position)
 {
-    u32 i, k, p;
-    for (i = 0u; i < length; i++) {
-        if (data[i] != '"') continue;
+    u32 i = 0u, k, p, object_depth = 0u, array_depth = 0u;
+    u32 direct_object_depth = 0u;
+    int in_string = 0, escaped = 0;
+
+    p = json_skip_ws(data, length, 0u);
+    if (p < length && data[p] == '{') direct_object_depth = 1u;
+
+    while (i < length) {
+        u8 c = data[i];
+        if (in_string) {
+            if (escaped) escaped = 0;
+            else if (c == '\\') escaped = 1;
+            else if (c == '"') in_string = 0;
+            i++;
+            continue;
+        }
+        if (c == '{') { object_depth++; i++; continue; }
+        if (c == '}') { if (object_depth != 0u) object_depth--; i++; continue; }
+        if (c == '[') { array_depth++; i++; continue; }
+        if (c == ']') { if (array_depth != 0u) array_depth--; i++; continue; }
+        if (c != '"') { i++; continue; }
+
+        if (object_depth != direct_object_depth || array_depth != 0u) {
+            in_string = 1;
+            i++;
+            continue;
+        }
+
         p = i + 1u;
         k = 0u;
         while (key[k] && p < length && data[p] == (u8)key[k]) { p++; k++; }
-        if (key[k] || p >= length || data[p] != '"') continue;
-        p = json_skip_ws(data, length, p + 1u);
-        if (p >= length || data[p] != ':') continue;
-        p = json_skip_ws(data, length, p + 1u);
-        if (p >= length) return 0;
-        *position = p;
-        return 1;
+        if (!key[k] && p < length && data[p] == '"') {
+            p = json_skip_ws(data, length, p + 1u);
+            if (p < length && data[p] == ':') {
+                p = json_skip_ws(data, length, p + 1u);
+                if (p >= length) return 0;
+                *position = p;
+                return 1;
+            }
+        }
+
+        in_string = 1;
+        i++;
     }
     return 0;
 }

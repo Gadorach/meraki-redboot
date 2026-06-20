@@ -1,5 +1,12 @@
 # Release record
 
+## 0.7.0 post-release recovery manifest parser correction
+
+- Scoped minimal JSON key lookup to direct members of the object being validated.
+- Prevented nested `artifact.kernel_payload.sha256` and region digests from shadowing the top-level `artifact.sha256` binding.
+- Added `manifest_lookup_contract: direct-object-members-v1` to recovery payload and loader manifests.
+- Added regression coverage for sorted manifests where a nested SHA-256 key appears before the full-image digest.
+
 ## 0.7.0 — explicit stage-2 menu and embedded platform recovery
 
 - Replaced the automatic UART-header probe with a two-step boot menu. Any byte
