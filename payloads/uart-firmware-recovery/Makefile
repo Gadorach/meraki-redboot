@@ -2,6 +2,7 @@ CROSS_COMPILE ?= mipsel-linux-gnu-
 CC := $(CROSS_COMPILE)gcc
 LD := $(CROSS_COMPILE)ld
 OBJCOPY := $(CROSS_COMPILE)objcopy
+READELF := $(CROSS_COMPILE)readelf
 SHA256SUM ?= sha256sum
 PYTHON ?= python3
 ROOT := ../..
@@ -24,17 +25,22 @@ all: $(ARTIFACT_DIR)/recovery-luton26.bin \
 $(BUILD_DIR) $(ARTIFACT_DIR):
 	@mkdir -p $@
 
+$(BUILD_DIR)/entry.o: entry.S | $(BUILD_DIR)
+	$(CC) $(COMMON_CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/recovery-luton26.o: recovery.c $(ROOT)/include/postmerkos_uart_crypto.h | $(BUILD_DIR)
 	$(CC) $(COMMON_CFLAGS) -DRECOVERY_SOC_FAMILY=1 -c $< -o $@
 
 $(BUILD_DIR)/recovery-jaguar1.o: recovery.c $(ROOT)/include/postmerkos_uart_crypto.h | $(BUILD_DIR)
 	$(CC) $(COMMON_CFLAGS) -DRECOVERY_SOC_FAMILY=2 -c $< -o $@
 
-$(BUILD_DIR)/recovery-luton26.elf: $(BUILD_DIR)/recovery-luton26.o linker.ld
-	$(LD) $(LDFLAGS) $< -o $@
+$(BUILD_DIR)/recovery-luton26.elf: $(BUILD_DIR)/entry.o $(BUILD_DIR)/recovery-luton26.o linker.ld
+	$(LD) $(LDFLAGS) $(BUILD_DIR)/entry.o $(BUILD_DIR)/recovery-luton26.o -o $@
+	@$(READELF) -h $@ | grep -Eq "Entry point address:[[:space:]]+0x81000000$$"
 
-$(BUILD_DIR)/recovery-jaguar1.elf: $(BUILD_DIR)/recovery-jaguar1.o linker.ld
-	$(LD) $(LDFLAGS) $< -o $@
+$(BUILD_DIR)/recovery-jaguar1.elf: $(BUILD_DIR)/entry.o $(BUILD_DIR)/recovery-jaguar1.o linker.ld
+	$(LD) $(LDFLAGS) $(BUILD_DIR)/entry.o $(BUILD_DIR)/recovery-jaguar1.o -o $@
+	@$(READELF) -h $@ | grep -Eq "Entry point address:[[:space:]]+0x81000000$$"
 
 $(ARTIFACT_DIR)/recovery-%.bin: $(BUILD_DIR)/recovery-%.elf | $(ARTIFACT_DIR)
 	$(OBJCOPY) -O binary $< $@

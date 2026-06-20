@@ -945,7 +945,7 @@ static void halt(void)
     for (;;) __asm__ __volatile__("wait");
 }
 
-void _start(void)
+void recovery_main(void)
 {
     u8 raw[PACKAGE_HEADER_BYTES];
     u8 id[3];

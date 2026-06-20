@@ -44,6 +44,9 @@ def main() -> int:
         },
         "operations": ["verify", "dry-run", "flash"],
         "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
+        "load_address": 0x81000000,
+        "entry_address": 0x81000000,
+        "entry_contract": "flat-binary-byte-zero-v1",
         "binary": {
             "filename": args.binary.name,
             "bytes": len(data),

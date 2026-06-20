@@ -186,3 +186,11 @@ Development records and prior release notes are maintained under:
 - `docs/history/gcc10-loader-codegen.md`
 - `docs/history/binutils-bootstrap-v0.4.1.md`
 - `docs/history/uart-fixed-ram-stage-v0.5.0.md`
+
+## Unreleased — recovery flat-binary entry correction
+
+- Added an assembly byte-zero entry veneer for both embedded recovery payloads.
+- Fixed the recovery linker layout so ELF metadata cannot precede executable bytes.
+- Initialises stack, global pointer, and BSS before entering C recovery code.
+- Added build-time and structural assertions that `_start` is exactly `0x81000000`.
+- Added a machine-readable `flat-binary-byte-zero-v1` payload entry contract.

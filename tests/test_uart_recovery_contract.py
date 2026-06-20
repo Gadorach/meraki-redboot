@@ -148,6 +148,22 @@ class UartRecoveryContractTests(unittest.TestCase):
         ):
             self.assertIn(token, LOADER_SOURCE)
 
+
+    def test_recovery_flat_binary_has_explicit_byte_zero_entry(self) -> None:
+        entry = (ROOT / "payloads/uart-firmware-recovery/entry.S").read_text(encoding="utf-8")
+        linker = (ROOT / "payloads/uart-firmware-recovery/linker.ld").read_text(encoding="utf-8")
+        makefile = (ROOT / "payloads/uart-firmware-recovery/Makefile").read_text(encoding="utf-8")
+        self.assertIn('.section .text.start', entry)
+        self.assertIn('lui     $sp, 0x813f', entry)
+        self.assertIn('jal     recovery_main', entry)
+        self.assertIn('KEEP(*(.text.start))', linker)
+        self.assertIn('ASSERT(_start == 0x81000000', linker)
+        self.assertIn('*(.MIPS.abiflags)', linker)
+        self.assertIn('$(BUILD_DIR)/entry.o', makefile)
+        self.assertIn('Entry point address:', makefile)
+        self.assertNotIn('void _start(void)', RECOVERY_SOURCE)
+        self.assertIn('void recovery_main(void)', RECOVERY_SOURCE)
+
     def test_recovery_enforces_manifest_flash_and_terminal_contracts(self) -> None:
         for token in (
             "PMOSRECOVERY2;SOC=", "PKG_MAGIC1", "PMOSPKG VERIFIED",
