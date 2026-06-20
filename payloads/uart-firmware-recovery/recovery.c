@@ -62,13 +62,13 @@ typedef pmos_u32 u32;
 #define SPI_SW_MODE_ADDR 0x70000064u
 #define SPI_GENERAL_CTRL_ADDR 0x70000024u
 #define SPI_GENERAL_CTRL_ENABLE_MASK 0u
-#define RECOVERY_DESCRIPTOR "PMOSRECOVERY2;SOC=luton26;FAMILY=1;SPI=70000064;PROTO=2;PREFLIGHT=2;END"
+#define RECOVERY_DESCRIPTOR "PMOSRECOVERY2;SOC=luton26;FAMILY=1;SPI=70000064;PROTO=2;PREFLIGHT=3;END"
 #elif RECOVERY_SOC_FAMILY == 2
 #define RECOVERY_SOC_NAME "jaguar1"
 #define SPI_SW_MODE_ADDR 0x70000068u
 #define SPI_GENERAL_CTRL_ADDR 0x70000028u
 #define SPI_GENERAL_CTRL_ENABLE_MASK (1u << 2)
-#define RECOVERY_DESCRIPTOR "PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=2;END"
+#define RECOVERY_DESCRIPTOR "PMOSRECOVERY2;SOC=jaguar1;FAMILY=2;SPI=70000068;PROTO=2;PREFLIGHT=3;END"
 #else
 #error unsupported RECOVERY_SOC_FAMILY
 #endif
@@ -79,10 +79,11 @@ typedef pmos_u32 u32;
 #define SPI_SW_SDO           (1u << 10)
 #define SPI_SW_SDO_OE        (1u << 9)
 #define SPI_SW_CS_SHIFT      5u
+#define SPI_SW_CS_MASK       (0x0fu << SPI_SW_CS_SHIFT)
 #define SPI_SW_CS_OE_SHIFT   1u
 #define SPI_SW_SDI           (1u << 0)
-#define SPI_CS_ALL_HIGH      0x0fu
-#define SPI_CS0_LOW          0x0eu
+#define SPI_CS0_MASK         0x01u
+#define SPI_CS_NONE          0x00u
 #define SPI_HALF_PERIOD_TICKS 32u
 
 struct package_header {
@@ -754,6 +755,11 @@ static int spi_controller_prepare(void)
         puts_b("PMOSREC RESULT ERROR SPI-MASTER-ENABLE\n");
         return -1;
     }
+
+    /* Release any stale software-pin state inherited from an earlier stage. */
+    *spi_sw = 0u;
+    __asm__ __volatile__("sync" ::: "memory");
+    puts_b("PMOSREC SPI-CS-CONTRACT ACTIVE-MASK CS0=00000001 NONE=00000000\n");
     return 0;
 }
 
@@ -763,38 +769,63 @@ static void spi_delay(void)
     while ((u32)(cp0_count() - start) < SPI_HALF_PERIOD_TICKS) {}
 }
 
-static void spi_drive(u32 chip_select, u32 clock, u32 data_out)
+static u32 spi_active_base(void)
 {
-    u32 value = SPI_SW_PIN_CTRL_MODE | SPI_SW_SCK_OE | SPI_SW_SDO_OE |
-                (1u << SPI_SW_CS_OE_SHIFT) | (chip_select << SPI_SW_CS_SHIFT);
-    if (clock) value |= SPI_SW_SCK;
-    if (data_out) value |= SPI_SW_SDO;
+    /*
+     * The MSCC SW_MODE chip-select field is an active-mask, not a level map:
+     * BIT(n) asserts CSn and zero deselects all chip selects.  This mirrors
+     * the working upstream mscc_bb_spi driver exactly.
+     */
+    return SPI_SW_PIN_CTRL_MODE | SPI_SW_SCK_OE | SPI_SW_SDO_OE |
+           (SPI_CS0_MASK << SPI_SW_CS_OE_SHIFT) |
+           (SPI_CS0_MASK << SPI_SW_CS_SHIFT);
+}
+
+static void spi_write(u32 value)
+{
     *spi_sw = value;
+    __asm__ __volatile__("sync" ::: "memory");
     spi_delay();
 }
 
 static void spi_deselect(void)
 {
-    spi_drive(SPI_CS_ALL_HIGH, 0u, 0u);
-    spi_drive(SPI_CS_ALL_HIGH, 1u, 0u);
-    spi_drive(SPI_CS_ALL_HIGH, 0u, 0u);
+    u32 value = *spi_sw;
+
+    /* Actively deselect CS0 while preserving the current clock level. */
+    value &= ~SPI_SW_CS_MASK;
+    spi_write(value);
+
+    /* Stop driving SCK, then release the complete software-mode register. */
+    value &= ~SPI_SW_SCK_OE;
+    spi_write(value);
+    spi_write(0u);
 }
 
 static void spi_select(void)
 {
-    spi_drive(SPI_CS_ALL_HIGH, 0u, 0u);
-    spi_drive(SPI_CS0_LOW, 0u, 0u);
+    u32 value = spi_active_base();
+
+    /* SPI mode 0: start high, then the first data setup drives SCK low. */
+    spi_write(value | SPI_SW_SCK);
 }
 
 static u8 spi_xfer(u8 output)
 {
     u8 input = 0u;
+    u32 base = spi_active_base();
     int bit;
+
     for (bit = 7; bit >= 0; bit--) {
-        spi_drive(SPI_CS0_LOW, 0u, (output >> bit) & 1u);
-        spi_drive(SPI_CS0_LOW, 1u, (output >> bit) & 1u);
+        u32 value = base;
+        if (((output >> bit) & 1u) != 0u) value |= SPI_SW_SDO;
+
+        /* Data setup on SCK low, target samples on rising edge. */
+        spi_write(value);
+        spi_write(value | SPI_SW_SCK);
+
+        /* Sample close to the following falling edge, as the MSCC driver does. */
         if ((*spi_sw & SPI_SW_SDI) != 0u) input |= (u8)(1u << bit);
-        spi_drive(SPI_CS0_LOW, 0u, (output >> bit) & 1u);
     }
     return input;
 }

@@ -77,9 +77,11 @@ the switch is unpowered, and retain verified backups.
 
 The recovery stage prepares the SoC SPI interface before its first NOR command.
 On Jaguar1 it preserves the existing `GENERAL_CTRL` value and sets
-`IF_MASTER_SPI_ENA`; clearing or failing to restore this bit causes MISO to read
-high and produces a false `ffffff` JEDEC value. Luton26 retains its family-specific
-controller policy.
+`IF_MASTER_SPI_ENA`. It also follows the MSCC software-SPI active-mask contract:
+`SW_SPI_CS=BIT(0)` asserts CS0 and `SW_SPI_CS=0` deselects all devices. Treating
+that field as active-low levels leaves CS0 unselected and produces a false
+`ffffff` JEDEC value. Luton26 uses the same active-mask software-SPI semantics
+while retaining its family-specific controller policy.
 
 Immediately after the descriptor, the stage now performs a short, non-writing
 hardware check and emits:

@@ -214,4 +214,13 @@ Development records and prior release notes are maintained under:
 - Add JEDEC, SFDP, status, protection, and error-latch preflight diagnostics.
 - Add the `PMOSPFT1` destructive-but-restored 64 KiB scratch-sector test.
 - Hard-protect the 256 KiB bootloader region and verify its before/after CRC-32 is unchanged.
-- Publish `spi-nor-scratch-rw-restore-loader-crc-v2` and `preserve-general-ctrl-enable-spi-v1` capability contracts.
+- Publish `spi-nor-scratch-rw-restore-loader-crc-v3` and `preserve-general-ctrl-enable-spi-v1` capability contracts.
+
+## Unreleased — MSCC software-SPI chip-select correction
+
+- Corrected `SPI_MST:SW_MODE.SW_SPI_CS` handling to use the documented active-mask semantics.
+- Assert CS0 with `BIT(0)` and deselect all devices by clearing the CS field, matching the working MSCC U-Boot bitbang driver.
+- Ported the U-Boot mode-0 activation, transfer, and deactivation sequence.
+- Added `PREFLIGHT=3` and `spi-nor-scratch-rw-restore-loader-crc-v3` so stale payloads with inverted CS handling are rejected.
+- Added an early `SPI-CS-CONTRACT ACTIVE-MASK` diagnostic before JEDEC probing.
+

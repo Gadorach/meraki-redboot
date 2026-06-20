@@ -1,0 +1,4 @@
+Known-good MSCC U-Boot driver contract:
+ICPU_SW_MODE_SW_SPI_CS_OE(BIT(cs)) | ICPU_SW_MODE_SW_SPI_CS(BIT(cs))
+CS(BIT(cs))
+value &= ~ICPU_SW_MODE_SW_SPI_CS_M
