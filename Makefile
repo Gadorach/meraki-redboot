@@ -12,7 +12,10 @@ CRC_POLICY_permissive := off
 SIZE_POLICY_permissive := hard-only
 CRC_POLICY ?= $(CRC_POLICY_$(VARIANT))
 SIZE_POLICY ?= $(SIZE_POLICY_$(VARIANT))
-UART_RAMLOADER ?= 0
+UART_RAMLOADER_strict := 0
+UART_RAMLOADER_development := 1
+UART_RAMLOADER_permissive := 0
+UART_RAMLOADER ?= $(if $(UART_RAMLOADER_$(VARIANT)),$(UART_RAMLOADER_$(VARIANT)),0)
 UART_RAMLOADER_MAX_SIZE ?= 0x00400000
 UART_RAMLOADER_RAM_START ?= 0x81000000
 UART_RAMLOADER_RAM_END ?= 0x87f00000
@@ -29,10 +32,15 @@ ifeq ($(filter $(SIZE_POLICY),$(VALID_SIZE_POLICIES)),)
 $(error SIZE_POLICY must be one of: $(VALID_SIZE_POLICIES); named profiles are strict, development, permissive)
 endif
 
-CROSS_COMPILE ?= mipsel-linux-gnu-
+WORK_ROOT ?= $(CURDIR)/.work
+export POSTMERKOS_WORK_ROOT := $(WORK_ROOT)
+TOOLCHAIN_ROOT ?= $(shell POSTMERKOS_WORK_ROOT='$(WORK_ROOT)' ./scripts/toolchain-env.sh --print-root 2>/dev/null)
+CROSS_COMPILE ?= $(TOOLCHAIN_ROOT)/bin/mipsel-linux-gnu-
 JOBS ?= $(shell nproc 2>/dev/null || echo 1)
 SOURCE_DATE_EPOCH ?= 1605204110
-BUILD_TARGET ?= all
+BUILD_TARGET ?= __all-local
+BUILD_MODE ?= prompt
+BUILD_CONTEXT ?= direct
 
 LOADER_REGION_SIZE := 0x00040000
 FALLBACK_REGION_SIZE ?= 0x00400000
@@ -47,9 +55,11 @@ OBJDUMP := $(CROSS_COMPILE)objdump
 NM := $(CROSS_COMPILE)nm
 READELF := $(CROSS_COMPILE)readelf
 
-BUILD_DIR := build/$(VARIANT)
-OUT_DIR := out/$(VARIANT)
-ARTIFACT_DIR := artifacts
+BUILD_DIR := $(WORK_ROOT)/build/$(VARIANT)
+OUT_DIR := $(WORK_ROOT)/out/$(VARIANT)
+ARTIFACT_DIR := $(WORK_ROOT)/artifacts
+LOG_DIR := $(WORK_ROOT)/logs
+SUPPORT_DIR := $(WORK_ROOT)/support
 ARTIFACT := $(ARTIFACT_DIR)/vcoreiii-linuxloader-$(VARIANT).bin
 LOADER_ELF := $(BUILD_DIR)/loader.elf
 LOADER_BIN := $(BUILD_DIR)/loader.bin
@@ -80,23 +90,34 @@ POLICY_CPPFLAGS := \
 	-DCONFIG_UART_RAMLOADER_INTERBYTE_TIMEOUT_MS=$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS) \
 	-DCONFIG_UART_RAMLOADER_COUNT_HZ=$(UART_RAMLOADER_COUNT_HZ)
 
-# These reproduce the material MIPS flags inherited from Linux 3.18 Kbuild.
-# The C initialization objects deliberately override -fno-pic/-G0 with
-# -fPIC/-G65535, exactly as the original loader Makefile did.
-COMMON_FLAGS := \
-	-EL -mabi=32 -march=mips32r2 -msoft-float \
-	-G 0 -mno-abicalls -fno-pic \
+# The reset-time source was written for GCC 4.7's embedded MIPS PIC model:
+# -fPIC with -mno-abicalls and a large GP data window. Current distro GCC
+# releases reject or materially change that model, so this build does not use
+# the host distribution's cross compiler. Release builds use the source-built,
+# checksum-pinned GCC 4.7.3/binutils 2.23.2 toolchain installed by the helpers.
+ARCH_FLAGS := -EL -mabi=32 -march=mips32r2 -msoft-float
+FREESTANDING_FLAGS := \
 	-ffreestanding -fno-builtin -fno-common \
 	-fno-stack-protector -fomit-frame-pointer \
 	-Os -pipe -nostdinc -I$(CURDIR)/include -I$(CURDIR)/src \
 	-Wa,-mips32r2 -Wa,--trap
 
-CFLAGS := $(COMMON_FLAGS) \
+CFLAGS := $(ARCH_FLAGS) $(FREESTANDING_FLAGS) \
+	-mno-abicalls -fPIC -G 65535 \
 	-std=gnu89 -Wall -Wextra -Werror=implicit-function-declaration \
-	-Wno-unused-function -Wno-unused-parameter -Wno-sign-compare \
-	-Wno-error=date-time -fPIC -G 65535
+	-Wno-unused-function -Wno-unused-parameter -Wno-sign-compare
 
-ASFLAGS := $(COMMON_FLAGS) -D__ASSEMBLY__ -x assembler-with-cpp
+# Reset-time C runs before writable RAM or a stack exists.  The complete
+# initialization call graph is forced inline in src/init*.c; these options
+# stop GCC from emitting ABI save/restore traffic for s0-s7 in the resulting
+# leaf entry point.  They are deliberately limited to the two pre-DDR objects.
+PRE_DDR_CALL_USED_FLAGS := \
+	-fcall-used-s0 -fcall-used-s1 -fcall-used-s2 -fcall-used-s3 \
+	-fcall-used-s4 -fcall-used-s5 -fcall-used-s6 -fcall-used-s7
+PRE_DDR_CFLAGS := $(CFLAGS) $(PRE_DDR_CALL_USED_FLAGS) -finline-functions -finline-limit=100000
+
+ASFLAGS := $(ARCH_FLAGS) $(FREESTANDING_FLAGS) \
+	-mno-abicalls -fno-pic -G 0 -D__ASSEMBLY__ -x assembler-with-cpp
 LDFLAGS_LOADER := -EL -m elf32ltsmip -G 0 -static -n -nostdlib \
 	-T src/loader.lds -Map $(LOADER_MAP)
 LDFLAGS_WRAPPER := -EL -m elf32ltsmip -G 0 -static -n -nostdlib \
@@ -107,14 +128,32 @@ ifneq ($(filter 1 y yes true,$(UART_RAMLOADER)),)
 LOADER_OBJECTS += $(BUILD_DIR)/uart_ramloader.o
 endif
 
-.PHONY: all raw image validate inspect variants reference-check check-tools \
-	check-config clean distclean deps distrobox refresh-source test test-wrapper-fit payload recovery-payloads help
+.PHONY: all __all-local __loader-local raw image validate inspect variants reference-check check-tools \
+	check-toolchain check-config clean distclean deps toolchain distrobox refresh-source test test-wrapper-fit payload recovery-payloads support-bundle work-layout help
 
-all: check-config image validate
+# `make all` is the user-facing dispatcher. It prompts once on an interactive
+# terminal and then invokes the internal target either natively or in Distrobox.
+all:
+	+@BUILD_MODE='$(BUILD_MODE)' MAKE_COMMAND='$(MAKE)' JOBS='$(JOBS)' \
+	  ./scripts/build-dispatch.sh __all-local \
+	  "VARIANT=$(VARIANT)" "CRC_POLICY=$(CRC_POLICY)" "SIZE_POLICY=$(SIZE_POLICY)" \
+	  "FALLBACK_REGION_SIZE=$(FALLBACK_REGION_SIZE)" "PAYLOAD_SLOT_END=$(PAYLOAD_SLOT_END)" \
+	  "LEGACY_PAYLOAD_LIMIT=$(LEGACY_PAYLOAD_LIMIT)" "HARD_PAYLOAD_LIMIT=$(HARD_PAYLOAD_LIMIT)" \
+	  "UART_RAMLOADER=$(UART_RAMLOADER)" "UART_RAMLOADER_MAX_SIZE=$(UART_RAMLOADER_MAX_SIZE)" \
+	  "UART_RAMLOADER_RAM_START=$(UART_RAMLOADER_RAM_START)" "UART_RAMLOADER_RAM_END=$(UART_RAMLOADER_RAM_END)" \
+	  "UART_RAMLOADER_PROBE_TIMEOUT_MS=$(UART_RAMLOADER_PROBE_TIMEOUT_MS)" \
+	  "UART_RAMLOADER_INTERBYTE_TIMEOUT_MS=$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)" \
+	  "UART_RAMLOADER_COUNT_HZ=$(UART_RAMLOADER_COUNT_HZ)" \
+	  "SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)" "WORK_ROOT=$(WORK_ROOT)"
 
-raw: check-config $(LOADER_BIN)
+__loader-local: check-tools check-toolchain check-config image validate
 
-image: $(ARTIFACT) \
+# A successful default build produces the boot region and both RAM recovery tools.
+__all-local: __loader-local recovery-payloads
+
+raw: check-tools check-toolchain check-config $(LOADER_BIN)
+
+image: check-tools check-toolchain $(ARTIFACT) \
        $(OUT_DIR)/loader-$(VARIANT).elf \
        $(OUT_DIR)/loader-$(VARIANT).bin \
        $(OUT_DIR)/loader-$(VARIANT).map \
@@ -128,10 +167,13 @@ image: $(ARTIFACT) \
 
 check-tools:
 	@missing=0; \
-	for tool in "$(CC)" "$(LD)" "$(OBJCOPY)" "$(OBJDUMP)" "$(NM)" python3 sha256sum stat; do \
+	for tool in "$(CC)" "$(LD)" "$(OBJCOPY)" "$(OBJDUMP)" "$(NM)" "$(READELF)" python3 sha256sum stat; do \
 	  command -v "$$tool" >/dev/null 2>&1 || { echo "missing required tool: $$tool" >&2; missing=1; }; \
 	done; \
 	test $$missing -eq 0
+
+check-toolchain:
+	@ALLOW_UNVERIFIED_TOOLCHAIN='$(ALLOW_UNVERIFIED_TOOLCHAIN)' ./scripts/check-toolchain.sh '$(CROSS_COMPILE)'
 
 check-config:
 	@python3 scripts/check_config.py \
@@ -150,34 +192,53 @@ check-config:
 	  --uart-interbyte-timeout-ms '$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)' \
 	  --uart-count-hz '$(UART_RAMLOADER_COUNT_HZ)'
 
-$(BUILD_DIR):
-	@mkdir -p $@
-
-$(OUT_DIR):
-	@mkdir -p $@
-
-$(ARTIFACT_DIR):
+$(BUILD_DIR) $(OUT_DIR) $(ARTIFACT_DIR) $(LOG_DIR) $(SUPPORT_DIR):
 	@mkdir -p $@
 
 $(BUILD_DIR)/head.o: src/head.S | $(BUILD_DIR)
 	@echo "  AS      $@ ($(CRC_POLICY)/$(SIZE_POLICY))"
+	@printf '%s\n' "$(CC) $(ASFLAGS) $(POLICY_CPPFLAGS) -c $< -o $@" > $@.cmd
 	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(ASFLAGS) $(POLICY_CPPFLAGS) -c $< -o $@
+	@$(OBJDUMP) -drwC $@ > $@.dis
+	@$(READELF) -rW $@ > $@.relocs
 
-$(BUILD_DIR)/init_luton26.o: src/init_luton26.c src/init.h | $(BUILD_DIR)
+$(BUILD_DIR)/init_luton26.o: src/init_luton26.c src/init.h include/asm/mipsregs.h | $(BUILD_DIR)
 	@echo "  CC      $@"
-	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(CFLAGS) -c $< -o $@
+	@printf '%s\n' "$(CC) $(PRE_DDR_CFLAGS) -c $< -o $@" > $@.cmd
+	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(PRE_DDR_CFLAGS) -S $< -o $@.s
+	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(PRE_DDR_CFLAGS) -c $< -o $@
+	@$(OBJDUMP) -drwC $@ > $@.dis
+	@$(READELF) -rW $@ > $@.relocs
 
-$(BUILD_DIR)/init_jaguar.o: src/init_jaguar.c src/init.h | $(BUILD_DIR)
+$(BUILD_DIR)/init_jaguar.o: src/init_jaguar.c src/init.h include/asm/mipsregs.h | $(BUILD_DIR)
 	@echo "  CC      $@"
-	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(CFLAGS) -c $< -o $@
+	@printf '%s\n' "$(CC) $(PRE_DDR_CFLAGS) -c $< -o $@" > $@.cmd
+	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(PRE_DDR_CFLAGS) -S $< -o $@.s
+	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(PRE_DDR_CFLAGS) -c $< -o $@
+	@$(OBJDUMP) -drwC $@ > $@.dis
+	@$(READELF) -rW $@ > $@.relocs
 
 $(BUILD_DIR)/uart_ramloader.o: src/uart_ramloader.c | $(BUILD_DIR)
 	@echo "  CC      $@"
+	@printf '%s\n' "$(CC) $(CFLAGS) $(POLICY_CPPFLAGS) -c $< -o $@" > $@.cmd
+	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(CFLAGS) $(POLICY_CPPFLAGS) -S $< -o $@.s
 	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(CFLAGS) $(POLICY_CPPFLAGS) -c $< -o $@
+	@$(OBJDUMP) -drwC $@ > $@.dis
+	@$(READELF) -rW $@ > $@.relocs
 
-$(LOADER_ELF): $(LOADER_OBJECTS) src/loader.lds
+$(LOADER_ELF): $(LOADER_OBJECTS) src/loader.lds scripts/validate_loader_codegen.py | $(LOG_DIR)
 	@echo "  LD      $@"
-	@$(LD) $(LDFLAGS_LOADER) -o $@ $(LOADER_OBJECTS)
+	@set -o pipefail; tmp='$@.tmp'; rm -f "$$tmp"; \
+	  $(LD) $(LDFLAGS_LOADER) -o "$$tmp" $(LOADER_OBJECTS); \
+	  $(OBJDUMP) -drwC "$$tmp" > '$@.tmp.dis'; \
+	  $(READELF) -aW "$$tmp" > '$@.tmp.readelf'; \
+	  python3 scripts/validate_loader_codegen.py \
+	    --elf "$$tmp" --objdump '$(OBJDUMP)' --readelf '$(READELF)' --nm '$(NM)' \
+	    --pre-ddr-object '$(BUILD_DIR)/init_luton26.o' \
+	    --pre-ddr-object '$(BUILD_DIR)/init_jaguar.o' 2>&1 | tee '$(LOG_DIR)/loader-codegen-validation-$(VARIANT).log'; \
+	  rc=$${PIPESTATUS[0]}; \
+	  if [[ $$rc -ne 0 ]]; then echo "Validation failed; share $(WORK_ROOT) or run 'make support-bundle'." >&2; exit $$rc; fi; \
+	  mv "$$tmp" '$@'; mv '$@.tmp.dis' '$@.dis'; mv '$@.tmp.readelf' '$@.readelf'
 
 $(LOADER_SYM): $(LOADER_ELF)
 	@$(NM) -n $< > $@
@@ -244,6 +305,8 @@ $(ARTIFACT).manifest.json: $(ARTIFACT) $(LOADER_BIN)
 	  --uart-ram-end '$(UART_RAMLOADER_RAM_END)' \
 	  --uart-probe-timeout-ms '$(UART_RAMLOADER_PROBE_TIMEOUT_MS)' \
 	  --uart-interbyte-timeout-ms '$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)' \
+	  --compiler '$(CC)' --linker '$(LD)' \
+	  --toolchain-id "$$(./scripts/toolchain-env.sh --print-id)" \
 	  --loader $(LOADER_BIN) --image $(ARTIFACT) --output $@
 
 $(ARTIFACT).manifest.json.sha256: $(ARTIFACT).manifest.json
@@ -259,7 +322,7 @@ inspect: $(ARTIFACT) $(LOADER_BIN) $(LOADER_SYM)
 
 variants:
 	@for variant in strict development permissive; do \
-	  $(MAKE) --no-print-directory VARIANT=$$variant all || exit $$?; \
+	  $(MAKE) --no-print-directory VARIANT=$$variant __loader-local || exit $$?; \
 	done
 
 payload:
@@ -274,8 +337,21 @@ payload:
 	   --max-payload-size '$(HARD_PAYLOAD_LIMIT)' --metadata "$$out.json"; \
 	 python3 tools/mkvcoreiii_payload.py verify "$$out" --max-payload-size '$(HARD_PAYLOAD_LIMIT)'
 
-recovery-payloads:
-	@$(MAKE) -C payloads/uart-firmware-recovery CROSS_COMPILE='$(CROSS_COMPILE)' all
+recovery-payloads: check-tools check-toolchain
+	@$(MAKE) -C payloads/uart-firmware-recovery CROSS_COMPILE='$(CROSS_COMPILE)' \
+	  BUILD_DIR='$(WORK_ROOT)/recovery/build' ARTIFACT_DIR='$(WORK_ROOT)/recovery/artifacts' all
+
+work-layout:
+	@echo "Work root:      $(WORK_ROOT)"
+	@echo "Toolchain:     $(TOOLCHAIN_ROOT)"
+	@echo "Objects:       $(BUILD_DIR)"
+	@echo "Inspection:    $(OUT_DIR)"
+	@echo "Artifacts:     $(ARTIFACT_DIR)"
+	@echo "Recovery:      $(WORK_ROOT)/recovery"
+	@echo "Logs:          $(LOG_DIR)"
+
+support-bundle: | $(SUPPORT_DIR)
+	@POSTMERKOS_WORK_ROOT='$(WORK_ROOT)' ./scripts/create-support-bundle.sh '$(SUPPORT_DIR)'
 
 reference-check:
 	@test -n "$(REFERENCE_IMAGE)" || { echo 'usage: make reference-check REFERENCE_IMAGE=/path/redboot-nocrc-sz.bin' >&2; exit 2; }
@@ -288,6 +364,9 @@ refresh-source:
 deps:
 	@./scripts/install-deps.sh
 
+toolchain:
+	@./scripts/install-legacy-toolchain.sh
+
 distrobox:
 	@./scripts/distrobox-build.sh "$(BUILD_TARGET)" \
 	  "VARIANT=$(VARIANT)" "CRC_POLICY=$(CRC_POLICY)" "SIZE_POLICY=$(SIZE_POLICY)" \
@@ -299,7 +378,9 @@ distrobox:
 	  "UART_RAMLOADER_RAM_START=$(UART_RAMLOADER_RAM_START)" \
 	  "UART_RAMLOADER_RAM_END=$(UART_RAMLOADER_RAM_END)" \
 	  "UART_RAMLOADER_PROBE_TIMEOUT_MS=$(UART_RAMLOADER_PROBE_TIMEOUT_MS)" \
-	  "UART_RAMLOADER_INTERBYTE_TIMEOUT_MS=$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)"
+	  "UART_RAMLOADER_INTERBYTE_TIMEOUT_MS=$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)" \
+	  "UART_RAMLOADER_COUNT_HZ=$(UART_RAMLOADER_COUNT_HZ)" \
+	  "SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)" "WORK_ROOT=$(WORK_ROOT)"
 
 test-wrapper-fit:
 	@len=21080; $(WRAPPER_FIT_SHELL); test $$active -eq $$((0x40000 - 2 * len))
@@ -310,10 +391,10 @@ test:
 	@./scripts/structural-test-recovery-clang.sh
 
 clean:
-	@rm -rf build out artifacts
+	@rm -rf '$(WORK_ROOT)/build' '$(WORK_ROOT)/out' '$(WORK_ROOT)/artifacts' '$(WORK_ROOT)/recovery' '$(WORK_ROOT)/logs' '$(WORK_ROOT)/support'
 
-distclean: clean
-	@rm -f SOURCE-PROVENANCE.txt
+distclean:
+	@rm -rf '$(WORK_ROOT)'
 
 help:
 	@printf '%s\n' \
@@ -335,11 +416,21 @@ help:
 	  '' \
 	  'Other targets:' \
 	  '  make variants                    Build all three named profiles' \
-	  '  make distrobox                   Build default profile in Ubuntu 22.04 Distrobox' \
+	  '  make all                         Ask whether to use Distrobox; build loader + recovery tools' \
+	  '  make all BUILD_MODE=distrobox    Noninteractive Distrobox build' \
+	  '  make all BUILD_MODE=native       Noninteractive native build' \
+	  '  make distrobox                   Backward-compatible explicit Distrobox build' \
 	  '  make inspect                     Print compiled loader/wrapper layout' \
 	  '  make refresh-source GPL_ARCHIVE=/path/MS42-GPL-sources-3-18-122-master.zip' \
 	  '  make recovery-payloads           Build Luton26 and Jaguar1 recovery payloads' \
+	  '  make work-layout                Print source-local .work paths' \
+	  '  make support-bundle             Package objects, disassemblies and logs' \
 	  '  make test                        Run host tests and Clang structural builds' \
 	  '' \
-	  'Flashable output:' \
-	  '  artifacts/vcoreiii-linuxloader-<variant>.bin'
+	  'Generated work tree:' \
+	  '  .work/toolchains/               Pinned compiler and binutils' \
+	  '  .work/build/<variant>/          Objects, assembly, relocations and ELF files' \
+	  '  .work/out/<variant>/            Inspection copies and disassemblies' \
+	  '  .work/artifacts/                Flashable boot region and manifests' \
+	  '  .work/recovery/artifacts/       UART recovery payloads' \
+	  '  .work/logs/                     Build and validation logs'

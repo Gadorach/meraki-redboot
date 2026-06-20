@@ -72,7 +72,7 @@ Receive time is bounded in three places:
 ```sh
 python3 tools/uart_ramload_send.py \
   --port /dev/ttyUSB0 \
-  --binary payloads/uart-firmware-recovery/artifacts/recovery-luton26.bin \
+  --binary .work/recovery/artifacts/recovery-luton26.bin \
   --load-address 0x81000000 \
   --entry 0x81000000
 ```

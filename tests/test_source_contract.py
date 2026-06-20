@@ -84,6 +84,110 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("CRC_POLICY_permissive := off", makefile)
         self.assertIn("SIZE_POLICY_permissive := hard-only", makefile)
 
+    def test_release_build_uses_pinned_gcc_473_legacy_pic(self) -> None:
+        makefile = (ROOT / "Makefile").read_text()
+        config = (ROOT / "scripts/toolchain-config.sh").read_text()
+        installer = (ROOT / "scripts/install-legacy-toolchain.sh").read_text()
+        validator = (ROOT / "scripts/validate_loader_codegen.py").read_text()
+        self.assertIn("-mno-abicalls -fPIC -G 65535", makefile)
+        self.assertNotIn("-mgpopt", makefile)
+        self.assertIn("PRE_DDR_CALL_USED_FLAGS", makefile)
+        for register in ("s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7"):
+            self.assertIn(f"-fcall-used-{register}", makefile)
+        self.assertIn("LOADER_ALWAYS_INLINE", (ROOT / "src/init.h").read_text())
+        self.assertIn("-finline-limit=100000", makefile)
+        self.assertIn("gcc-4.7.3.tar.bz2", config)
+        self.assertIn("5671a2dd3b6ac0d23f305cb11a796aeb", config)
+        self.assertIn("binutils-2.23.2.tar.bz2", config)
+        self.assertIn("fe914e56fed7a9ec2eb45274b1f2e14b", config)
+        self.assertIn("all-gcc", installer)
+        toolchain_check = (ROOT / "scripts/check-toolchain.sh").read_text()
+        self.assertIn("-fcall-used-s7", toolchain_check)
+        self.assertIn("-finline-limit=100000", toolchain_check)
+        self.assertIn("without-headers", installer)
+        self.assertIn("pre-DDR initialization references the stack pointer", validator)
+        self.assertIn("final linked loader retains relocations", validator)
+
+    def test_pre_ddr_initializer_is_one_stackless_leaf_contract(self) -> None:
+        makefile = (ROOT / "Makefile").read_text()
+        common = (ROOT / "src/init.h").read_text()
+        validator = (ROOT / "scripts/validate_loader_codegen.py").read_text()
+        self.assertIn("PRE_DDR_CFLAGS", makefile)
+        self.assertIn("LOADER_ALWAYS_INLINE", common)
+        self.assertIn("LOADER_INIT_SYSTEM_BODY", common)
+        self.assertNotIn("init_system(void)", common)
+        for source_name, entry in (
+            ("init_luton26.c", "init_system_luton26"),
+            ("init_jaguar.c", "init_system_jaguar1"),
+        ):
+            source = (ROOT / "src" / source_name).read_text()
+            self.assertLess(source.index("init_board(void)"), source.index(entry))
+            self.assertIn("LOADER_INIT_SYSTEM_BODY();", source)
+        self.assertIn("call/link instructions", validator)
+        self.assertIn('"jal", "jalr", "bal", "bgezal", "bltzal"', validator)
+
+
+    def test_pre_ddr_cp0_helpers_are_mandatory_inline(self) -> None:
+        header = (ROOT / "include/asm/mipsregs.h").read_text()
+        self.assertIn(
+            "static inline __attribute__((always_inline)) void mtc0_tlbw_hazard(void)",
+            header,
+        )
+        self.assertIn(
+            "static inline __attribute__((always_inline)) void tlb_write_indexed(void)",
+            header,
+        )
+        self.assertNotRegex(header, r"static inline void (?:mtc0_tlbw_hazard|tlb_write_indexed)")
+
+    def test_generated_outputs_and_toolchain_are_source_local(self) -> None:
+        makefile = (ROOT / "Makefile").read_text()
+        config = (ROOT / "scripts/toolchain-config.sh").read_text()
+        dispatcher = (ROOT / "scripts/build-dispatch.sh").read_text()
+        self.assertIn("WORK_ROOT ?= $(CURDIR)/.work", makefile)
+        self.assertIn("$(WORK_ROOT)/build/$(VARIANT)", makefile)
+        self.assertIn("$(WORK_ROOT)/artifacts", makefile)
+        self.assertIn("postmerkos_work_root", config)
+        self.assertIn("printf '%s/.work", config)
+        self.assertIn("support-bundle", makefile)
+        self.assertIn("build-native.log", dispatcher)
+        self.assertIn("Importing verified legacy toolchain", (ROOT / "scripts/install-legacy-toolchain.sh").read_text())
+
+    def test_toolchain_bootstrap_disables_recursive_info_generation(self) -> None:
+        deps = (ROOT / "scripts/install-deps.sh").read_text()
+        installer = (ROOT / "scripts/install-legacy-toolchain.sh").read_text()
+        for token in ("bison", "gawk", "makeinfo", "m4", "texinfo"):
+            self.assertIn(token, deps)
+        self.assertIn("required=(bash make flex bison gawk makeinfo m4", installer)
+        self.assertIn("make -j\"$jobs\" MAKEINFO=true all-binutils all-gas all-ld", installer)
+        self.assertIn("make MAKEINFO=true install-binutils install-gas install-ld", installer)
+        self.assertIn("make -j\"$jobs\" MAKEINFO=true all-gcc", installer)
+        self.assertIn("make MAKEINFO=true install-gcc", installer)
+
+    def test_make_all_dispatches_to_optional_distrobox(self) -> None:
+        makefile = (ROOT / "Makefile").read_text()
+        dispatcher = (ROOT / "scripts/build-dispatch.sh").read_text()
+        self.assertIn("./scripts/build-dispatch.sh __all-local", makefile)
+        self.assertIn("Use Distrobox for compilation? [Y/n]", dispatcher)
+        self.assertIn("BUILD_MODE", dispatcher)
+        self.assertIn("__all-local: __loader-local recovery-payloads", makefile)
+
+    def test_current_docs_describe_source_built_gcc473(self) -> None:
+        readme = (ROOT / "README.md").read_text()
+        building = (ROOT / "docs/BUILDING.md").read_text()
+        build_script = (ROOT / "build.sh").read_text()
+        for text in (readme, building, build_script):
+            self.assertIn("GCC 4.7.3", text)
+            self.assertNotIn("pinned AOSP", text)
+        self.assertIn("make all", readme)
+        self.assertIn("BUILD_MODE=distrobox", building)
+        self.assertTrue((ROOT / "docs/TOOLCHAIN.md").is_file())
+
+    def test_development_profile_enables_uart_recovery(self) -> None:
+        makefile = (ROOT / "Makefile").read_text()
+        self.assertIn("UART_RAMLOADER_development := 1", makefile)
+        self.assertIn("UART_RAMLOADER_strict := 0", makefile)
+        self.assertIn("UART_RAMLOADER_permissive := 0", makefile)
+
     def test_payload_packer_generates_loader_compatible_crc(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)

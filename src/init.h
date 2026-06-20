@@ -43,6 +43,18 @@ enum {
 #define FALSE 0
 #define TRUE 1
 
+/*
+ * No writable stack exists while the SoC and DDR controller are being
+ * initialized.  GCC 4.7.3 must therefore fold the complete reset-time C
+ * call graph into init_system_<soc>() rather than emitting normal calls and
+ * an O32 stack frame.  The matching Makefile flags make s0-s7 call-clobbered
+ * only for these two reset-time translation units; the post-DDR UART loader
+ * and recovery programs keep the normal ABI.
+ */
+#ifndef LOADER_ALWAYS_INLINE
+#define LOADER_ALWAYS_INLINE static inline __attribute__((always_inline))
+#endif
+
 #ifdef MIPS_VCOREIII_MEMORY_16BIT
 #define VC3_MPAR_BURST_LENGTH 4 // in DDR2 16-bit mode, use burstlen 4
 #define VC3_MPAR_BURST_SIZE   0 // Could be 1 for DDR3
@@ -154,13 +166,12 @@ static const u_int32_t clock_speed[] =
 #define ANNOUNCE_PROGRESS() do { uart_puts(__func__); } while (0);
 #define ANNOUNCE_OK() ANNOUNCE_LITERAL(" ok\n")
 
-static void init_board(void);
 
 /*
  * check_chip_id - Verify we are on the right hardware
  */
 
-static inline bool
+LOADER_ALWAYS_INLINE bool
 check_chip_id(void)
 {
   return (VTSS_X_DEVCPU_GCB_CHIP_REGS_CHIP_ID_PART_ID
@@ -168,7 +179,7 @@ check_chip_id(void)
     (EXPECTED_CHIP_ID & 0xfff0);
 }
 
-static inline uint16_t
+LOADER_ALWAYS_INLINE uint16_t
 get_chip_id(void)
 {
     return (uint16_t)(VTSS_X_DEVCPU_GCB_CHIP_REGS_CHIP_ID_PART_ID
@@ -185,7 +196,7 @@ get_chip_id(void)
  * init_uart - Initialize the console UART
  */
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_uart(void)
 {
     register int cpu_clock;
@@ -218,27 +229,27 @@ init_uart(void)
  * with a stuck UART robustly.
  */
 
-static inline void
+LOADER_ALWAYS_INLINE void
 raw_uart_putc(char c)
 {
     while ((UART_BASE->lsr & UART_LSR_THRE) == 0) ;
 
     UART_BASE->rbr_thr = c;
-} __attribute__((always_inline));
+}
 
-static inline void
+LOADER_ALWAYS_INLINE void
 uart_putc(char c)
 {
     if (c == '\n')
 	raw_uart_putc('\r');	/* CR before LF, I mean handle newline */
     raw_uart_putc(c);
-} __attribute__((always_inline));
+}
 
 /*
  * uart_puts - Put a string to the console
  */
 
-static inline void
+LOADER_ALWAYS_INLINE void
 uart_puts(const char *str)
 {
     while (*str)
@@ -249,7 +260,7 @@ uart_puts(const char *str)
  * init_memctl - Initialize the memory controller
  */
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_memctl(void)
 {
     ANNOUNCE_PROGRESS();
@@ -327,7 +338,7 @@ init_memctl(void)
  * wait_memctl - Wait for the memory controller to be ready
  */
 
-static inline void
+LOADER_ALWAYS_INLINE void
 wait_memctl(void)
 {
     ANNOUNCE_PROGRESS();
@@ -349,19 +360,19 @@ wait_memctl(void)
   #define ADDR_DQS_DLY(__byte_lane__) &VTSS_ICPU_CFG_MEMCTRL_MEMCTRL_DQS_DLY
 #endif
 
-static inline void
+LOADER_ALWAYS_INLINE void
 set_dly(u_int8_t byte_lane, u_int32_t dly)
 {
-    volatile register unsigned long *reg = ADDR_DQS_DLY(byte_lane);
+    register volatile unsigned long *reg = ADDR_DQS_DLY(byte_lane);
     u_int32_t r = *reg;
     r &= ~VTSS_M_ICPU_CFG_MEMCTRL_MEMCTRL_DQS_DLY_DQS_DLY;
     *reg = r | VTSS_F_ICPU_CFG_MEMCTRL_MEMCTRL_DQS_DLY_DQS_DLY(dly);
 }
 
-static inline bool
+LOADER_ALWAYS_INLINE bool
 adjust_dly(u_int8_t byte_lane, int adjust)
 {
-    volatile register unsigned long *reg = ADDR_DQS_DLY(byte_lane);
+    register volatile unsigned long *reg = ADDR_DQS_DLY(byte_lane);
     register u_int32_t r   = *reg;
     register u_int32_t dly = VTSS_X_ICPU_CFG_MEMCTRL_MEMCTRL_DQS_DLY_DQS_DLY(r);
     dly += adjust;
@@ -373,10 +384,10 @@ adjust_dly(u_int8_t byte_lane, int adjust)
     return false;
 }
 
-static inline int
+LOADER_ALWAYS_INLINE int
 lookfor_and_incr(u_int8_t byte)
 {
-    volatile register u_int8_t *ram = (volatile u_int8_t *) VTSS_DDR_TO;
+    register volatile u_int8_t *ram = (volatile u_int8_t *) VTSS_DDR_TO;
 #ifdef MIPS_VCOREIII_MEMORY_16BIT
     register u_int8_t b0 = ram[0], b1 = ram[1];
 
@@ -397,7 +408,7 @@ lookfor_and_incr(u_int8_t byte)
 #endif
 }
 
-static inline int
+LOADER_ALWAYS_INLINE int
 train_bytelane(void)
 {
     register int res;
@@ -428,7 +439,7 @@ train_bytelane(void)
     return DDR_TRAIN_OK;
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 reset_memory_fifo(void)
 {
     VTSS_ICPU_CFG_MEMCTRL_MEMPHY_CFG |=
@@ -437,10 +448,10 @@ reset_memory_fifo(void)
       ~VTSS_F_ICPU_CFG_MEMCTRL_MEMPHY_CFG_PHY_FIFO_RST; /* Clear FIFO reset */
 }
 
-static inline bool
+LOADER_ALWAYS_INLINE bool
 test_memory(void)
 {
-    volatile register u_int32_t *ram = (volatile u_int32_t *)VTSS_DDR_TO;
+    register volatile u_int32_t *ram = (volatile u_int32_t *)VTSS_DDR_TO;
     register int count;
 
     ram[0] = 0;
@@ -457,7 +468,7 @@ test_memory(void)
     return TRUE;
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_memory_subsystem(void)
 {
     if (!(VTSS_ICPU_CFG_CPU_SYSTEM_CTRL_GENERAL_CTRL &
@@ -485,7 +496,7 @@ init_memory_subsystem(void)
  * irq_init - Initialize interrupt controller
  */
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_irq(void)
 {
     ANNOUNCE_PROGRESS();
@@ -500,13 +511,13 @@ init_irq(void)
     ANNOUNCE_OK();
 }
 
-static inline int
+LOADER_ALWAYS_INLINE int
 get_tlb_count(void)
 {
     return ((read_c0_config1() >> 25) & 0x3f) + 1;
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 set_tlb_entry(u_int32_t index, u_int32_t tlbmask, u_int32_t tlbhi,
 	      u_int32_t tlblo0, u_int32_t tlblo1)
 {
@@ -519,7 +530,7 @@ set_tlb_entry(u_int32_t index, u_int32_t tlbmask, u_int32_t tlbhi,
     tlb_write_indexed();
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 create_tlb(int index, u_int32_t offset, u_int32_t size,
            u_int32_t tlb_attrib1, u_int32_t tlb_attrib2)
 {
@@ -533,7 +544,7 @@ create_tlb(int index, u_int32_t offset, u_int32_t size,
 		  tlb_lo1 & TLB_LO_MASK);
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 invalidate_tlbs(void)
 {
     register int i, max;
@@ -543,7 +554,7 @@ invalidate_tlbs(void)
         create_tlb(i, i << 20, 1 << 12, MMU_REGIO_INVAL, MMU_REGIO_INVAL);
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_io_mapping(void)
 {
     /* 0x60000000 - 0x60ffffff */
@@ -562,7 +573,7 @@ init_io_mapping(void)
     create_tlb(4, VTSS_PI_CS3_TO,     64 << 20, MMU_REGIO_RW, MMU_REGIO_RW);
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_tlb(void)
 {
     register uint32_t gp;
@@ -574,7 +585,7 @@ init_tlb(void)
     }
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_pll(void)
 {
     ANNOUNCE_PROGRESS();
@@ -609,7 +620,7 @@ init_pll(void)
 }
 
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_spi(void)
 {
     ANNOUNCE_PROGRESS();
@@ -623,7 +634,7 @@ init_spi(void)
     ANNOUNCE_OK();
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_dram_uncached(u_int32_t *uncached_ram, u_int32_t cache_size)
 {
     register u_int32_t *addr;
@@ -653,7 +664,7 @@ init_dram_uncached(u_int32_t *uncached_ram, u_int32_t cache_size)
 }
 
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_icache(u_int32_t *cached_ram, u_int32_t cache_size, u_int32_t line_size)
 {
     register u_int32_t *addr;
@@ -671,7 +682,7 @@ init_icache(u_int32_t *cached_ram, u_int32_t cache_size, u_int32_t line_size)
     ANNOUNCE_OK();
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_dcache(u_int32_t *cached_ram, u_int32_t cache_size, u_int32_t line_size)
 {
     register u_int32_t *addr;
@@ -698,7 +709,7 @@ init_dcache(u_int32_t *cached_ram, u_int32_t cache_size, u_int32_t line_size)
     ANNOUNCE_OK();
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 enable_caches(void)
 {
     u_int32_t config;
@@ -712,7 +723,7 @@ enable_caches(void)
     ANNOUNCE_OK();
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_caches(void)
 {
     init_dram_uncached((u_int32_t *)VTSS_DDR_TO, 0x8000);
@@ -723,7 +734,7 @@ init_caches(void)
     create_tlb(3, VTSS_DDR_TO, 256 << 20, MMU_REGIO_WRITE_ACC, MMU_REGIO_WRITE_ACC);
 }
 
-static inline int32_t
+LOADER_ALWAYS_INLINE int32_t
 read_mii(u_int16_t controller, u_int16_t phy_addr, u_int16_t reg_addr)
 {
     u_int32_t val;
@@ -760,7 +771,7 @@ read_mii(u_int16_t controller, u_int16_t phy_addr, u_int16_t reg_addr)
     return val & 0xffff;
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 write_mii(u_int16_t controller, u_int16_t phy_addr, u_int16_t reg_addr,
     u_int16_t data)
 {
@@ -786,24 +797,27 @@ write_mii(u_int16_t controller, u_int16_t phy_addr, u_int16_t reg_addr,
     } while (val & VTSS_F_DEVCPU_GCB_MIIM_MII_STATUS_MIIM_STAT_BUSY);
 }
 
-static inline u_int32_t *
-init_system(void)
-{
-    init_tlb();			/* Must be first, I/O space is mapped! */
-    if (!check_chip_id())
-      return(NULL);
-    init_gpio();		/* Init the GPIO, for UART I/O */
-    init_uart();		/* Initialize console UART */
-    ANNOUNCE_LITERAL("LinuxLoader built " __DATE__ " " __TIME__ "\n");
-    init_pll();			/* Init PLL, set clocks */
-    init_uart();		/* Initialize the UART setup */
-    ANNOUNCE_OK();		/* UART working with PLL at a new value */
-    init_spi();
-    init_memory_subsystem();
-    init_irq();
-    init_caches();
-    init_pi();
-    init_board();		/* Board specific init */
-    ANNOUNCE_LITERAL("Low level initialization complete, exiting boot mode\n");
-    return (u_int32_t *)&VTSS_ICPU_CFG_CPU_SYSTEM_CTRL_GENERAL_CTRL;
-}
+/*
+ * Expand the complete initialization sequence in the platform entry point.
+ * The expansion occurs after init_board() has been defined, allowing GCC
+ * 4.7.3 to honor the always_inline contract for every pre-DDR helper.
+ */
+#define LOADER_INIT_SYSTEM_BODY() do {                                      \
+    init_tlb();                 /* Must be first: map I/O space. */          \
+    if (!check_chip_id())                                                   \
+        return NULL;                                                        \
+    init_gpio();                                                            \
+    init_uart();                                                            \
+    ANNOUNCE_LITERAL("LinuxLoader built " __DATE__ " " __TIME__ "\n");    \
+    init_pll();                                                             \
+    init_uart();                                                            \
+    ANNOUNCE_OK();                                                          \
+    init_spi();                                                             \
+    init_memory_subsystem();                                                \
+    init_irq();                                                             \
+    init_caches();                                                          \
+    init_pi();                                                              \
+    init_board();                                                           \
+    ANNOUNCE_LITERAL("Low level initialization complete, exiting boot mode\n"); \
+    return (u_int32_t *)&VTSS_ICPU_CFG_CPU_SYSTEM_CTRL_GENERAL_CTRL;        \
+} while (0)

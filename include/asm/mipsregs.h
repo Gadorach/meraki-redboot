@@ -39,12 +39,12 @@
 #define CONF_CM_CMASK                 7
 #define CONF_CM_CACHABLE_NONCOHERENT  3
 
-static inline void mtc0_tlbw_hazard(void)
+static inline __attribute__((always_inline)) void mtc0_tlbw_hazard(void)
 {
     __asm__ __volatile__("ehb" : : : "memory");
 }
 
-static inline void tlb_write_indexed(void)
+static inline __attribute__((always_inline)) void tlb_write_indexed(void)
 {
     __asm__ __volatile__(
         ".set push\n\t"

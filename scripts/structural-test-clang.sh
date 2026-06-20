@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Host-side structural test for environments without GNU mipsel-linux-gnu-gcc.
-# This does NOT replace the release GNU cross build: Clang rejects the original
-# GCC combination of -fPIC with -mno-abicalls, so C objects are compiled
-# non-PIC here solely to validate source completeness, linking, wrapper layout,
+# This does NOT replace the pinned GCC 4.7.3 release build. Clang rejects the
+# historical GCC combination of -fPIC with -mno-abicalls, and its MIPS backend
+# cannot compile the complete UART module with -G65535. This path therefore
+# uses -G0 solely to validate source completeness, linking, wrapper layout,
 # policy selection, and source-generated payload packaging.
 set -euo pipefail
 

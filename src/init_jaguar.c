@@ -26,6 +26,10 @@
 #define LOADER_BUILD_VCOREIII_JAGUAR 1
 #define MIPS_VCOREIII_MEMORY_16BIT 1
 #define EXPECTED_CHIP_ID 0x7460
+
+#ifndef LOADER_ALWAYS_INLINE
+#define LOADER_ALWAYS_INLINE static inline __attribute__((always_inline))
+#endif
 #define VTSS_DEVCPU_PI_PI_PI_MODE            VTSS_IOREG(VTSS_TO_DEVCPU_PI,0x3)
 
 #define VTSS_MACRO_CTRL_PLL5G_STATUS_PLL5G_STATUS0  VTSS_IOREG(VTSS_TO_HSIO,0x6)
@@ -60,9 +64,9 @@
 
 #define SLV_ADDR(addr) (*(volatile ulong *)((((ulong)(&addr))+(VTSS_PI_CS3_TO - VTSS_IO_ORIGIN1_OFFSET))))
 
-static inline void init_pi(void);
+LOADER_ALWAYS_INLINE void init_pi(void);
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_gpio(void)
 {
 	/* Place PHY in reset (low, GPIO 12, MS220-48 / MS320-24 / MS320-48 / MS42),
@@ -91,7 +95,7 @@ init_gpio(void)
 
 /* Note: This function can only be called after the parallel interface
    has been set up. */
-static inline int
+LOADER_ALWAYS_INLINE int
 detect_slave(void)
 {
 	/* Unset error bit -- we use this to detect failure of read */
@@ -101,9 +105,9 @@ detect_slave(void)
 		(VTSS_ICPU_CFG_PI_MST_PI_MST_STATUS(3) & VTSS_F_ICPU_CFG_PI_MST_PI_MST_STATUS_TIMEOUT_ERR_STICKY))
 		return 0;
 	return 1;
-} __attribute__((always_inline))
+}
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_pi(void)
 {
 	ANNOUNCE_PROGRESS();
@@ -146,7 +150,7 @@ init_pi(void)
 	}
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_board(void)
 {
 	register u_int16_t data;
@@ -221,5 +225,5 @@ init_board(void)
 u_int32_t *
 init_system_jaguar1(void)
 {
-    return init_system();
+    LOADER_INIT_SYSTEM_BODY();
 }

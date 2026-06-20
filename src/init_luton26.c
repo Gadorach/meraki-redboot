@@ -25,6 +25,10 @@
 #define LOADER_BUILD_VCOREIII_LUTON26 1
 #define EXPECTED_CHIP_ID 0x7427
 
+#ifndef LOADER_ALWAYS_INLINE
+#define LOADER_ALWAYS_INLINE static inline __attribute__((always_inline))
+#endif
+
 
 #define VTSS_MACRO_CTRL_PLL5G_STATUS_PLL5G_STATUS0  VTSS_IOREG(VTSS_TO_MACRO_CTRL,0x6)
 #define  VTSS_F_MACRO_CTRL_PLL5G_STATUS_PLL5G_STATUS0_LOCK_STATUS  VTSS_BIT(0)
@@ -58,7 +62,7 @@
 
 #include <linux/types.h>
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_gpio(void)
 {
     /*
@@ -71,7 +75,7 @@ init_gpio(void)
 					  VTSS_BIT(2) | VTSS_BIT(0));
 }
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_pi(void)
 {
     /* No PI to deal with */
@@ -79,7 +83,7 @@ init_pi(void)
 
 #include "init.h"
 
-static inline void
+LOADER_ALWAYS_INLINE void
 init_board(void)
 {
     register u_int16_t data;
@@ -136,6 +140,6 @@ init_board(void)
 u_int32_t *
 init_system_luton26(void)
 {
-    return init_system();
+    LOADER_INIT_SYSTEM_BODY();
 }
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 
@@ -37,6 +38,9 @@ def main() -> int:
     ap.add_argument("--uart-ram-end", type=integer, required=True)
     ap.add_argument("--uart-probe-timeout-ms", type=integer, required=True)
     ap.add_argument("--uart-interbyte-timeout-ms", type=integer, required=True)
+    ap.add_argument("--compiler", required=True)
+    ap.add_argument("--linker", required=True)
+    ap.add_argument("--toolchain-id", required=True)
     ap.add_argument("--loader", type=Path, required=True)
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
@@ -48,8 +52,26 @@ def main() -> int:
         raise SystemExit("UART RAM-loader was requested but the compiled loader lacks its v2 marker")
     if args.uart_ram_start >= args.uart_ram_end:
         raise SystemExit("UART RAM range is invalid")
+    compiler_version = subprocess.run(
+        [args.compiler, "--version"], check=True, text=True, capture_output=True
+    ).stdout.splitlines()[0]
+    compiler_dumpversion = subprocess.run(
+        [args.compiler, "-dumpversion"], check=True, text=True, capture_output=True
+    ).stdout.strip()
+    linker_version = subprocess.run(
+        [args.linker, "--version"], check=True, text=True, capture_output=True
+    ).stdout.splitlines()[0]
     data = {
-        "format": "postmerkos.vcoreiii-linuxloader-build.v3",
+        "format": "postmerkos.vcoreiii-linuxloader-build.v4",
+        "toolchain": {
+            "id": args.toolchain_id,
+            "compiler": args.compiler,
+            "compiler_version": compiler_version,
+            "compiler_dumpversion": compiler_dumpversion,
+            "linker": args.linker,
+            "linker_version": linker_version,
+            "code_generation_model": "legacy-mips-pic-no-abicalls",
+        },
         "variant": args.variant,
         "policies": {
             "crc": args.crc_policy,
