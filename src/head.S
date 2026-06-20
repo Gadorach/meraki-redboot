@@ -181,13 +181,10 @@ __start:bal	10f		/* Figure out where we are */
 	bal	loader_uart_puts
 	 nop
 
-	/* O32 requires the caller to provide a 16-byte argument build area at
-	 * 0(sp)..15(sp). Keep loader state above that area so normal GCC stage
-	 * prologues may spill a0-a3 without corrupting the return context. */
-	addiu	sp, sp, -32
-	sw	gp, 16(sp)
-	sw	s7, 20(sp)
-
+	/* Copy the fixed-RAM boot continuation.  Stage 1 owns all remaining
+	 * boot work: UART upload, flash-kernel validation/copy, and final entry.
+	 * It is entered with jr and is not expected to return to relocatable
+	 * flash code. */
 	lui	t0, %hi(uart_stage1_blob_start)
 	addiu	t0, t0, %lo(uart_stage1_blob_start)
 	add	t0, t0, gp		/* Source in the active/fallback flash copy */
@@ -202,18 +199,30 @@ __start:bal	10f		/* Figure out where we are */
 	 nop
 	sync
 
+	/* Stage arguments:
+	 *   a0 = detected SoC family
+	 *   a1 = SPIM payload header in mapped flash
+	 *   a2 = next fallback-region entry
+	 *   a3 = current loader runtime base (diagnostics)
+	 */
+	move	a0, s7
+	li	t0, LOADER_SIZE
+	add	a1, gp, t0
+	li	t0, LOADER_MASK
+	and	a1, a1, t0
+	li	t0, REGION_SIZE
+	add	a2, gp, t0
+	li	t0, REGION_MASK
+	and	a2, a2, t0
+	move	a3, gp
+
+	/* If stage 1 unexpectedly returns, resume the legacy loader at its
+	 * explicit continuation label rather than relying on a stale ra. */
+	lui	ra, %hi(loader_kernel_continue)
+	addiu	ra, ra, %lo(loader_kernel_continue)
+	add	ra, ra, gp
 	li	t9, UART_STAGE1_LOAD_ADDR
-	jalr	t9
-	 move	a0, s7		/* Pass detected SoC family */
-
-	lw	gp, 16(sp)
-	lw	s7, 20(sp)
-	addiu	sp, sp, 32
-
-	lui	a0, %hi(loader_uart_stage1_return_text)
-	addiu	a0, a0, %lo(loader_uart_stage1_return_text)
-	add	a0, a0, gp
-	bal	loader_uart_puts
+	jr	t9
 	 nop
 #endif
 
@@ -276,6 +285,7 @@ __start:bal	10f		/* Figure out where we are */
 	.endm
 #endif
 
+loader_kernel_continue:
 30:	li	a1, LOADER_SIZE	/* Get loader size */
 	add	a0, a1, gp	/* Round up to payload area */
 	li	a1, LOADER_MASK /* Get loader mask */
@@ -538,8 +548,6 @@ loader_crc_warning_text:
 #if defined(CONFIG_UART_RAMLOADER)
 loader_uart_stage1_copy_text:
 	.asciz "PMOSRAM STAGE1 COPY\n"
-loader_uart_stage1_return_text:
-	.asciz "PMOSRAM STAGE1 RETURN\n"
 #endif
 	.align	4
 #endif

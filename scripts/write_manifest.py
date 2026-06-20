@@ -67,7 +67,7 @@ def main() -> int:
         [args.linker, "--version"], check=True, text=True, capture_output=True
     ).stdout.splitlines()[0]
     data = {
-        "format": "postmerkos.vcoreiii-linuxloader-build.v5",
+        "format": "postmerkos.vcoreiii-linuxloader-build.v6",
         "toolchain": {
             "id": args.toolchain_id,
             "compiler": args.compiler,
@@ -75,7 +75,7 @@ def main() -> int:
             "compiler_dumpversion": compiler_dumpversion,
             "linker": args.linker,
             "linker_version": linker_version,
-            "code_generation_model": "stackless-flash-stage-plus-fixed-ram-uart-stage1",
+            "code_generation_model": "stackless-flash-stage-plus-fixed-ram-boot-continuation",
         },
         "variant": args.variant,
         "policies": {
@@ -97,7 +97,7 @@ def main() -> int:
             "supported_soc_families": ["luton26", "jaguar1"],
             "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
             "cache_maintenance": "mips32r2-dcache-writeback-invalidate-icache-invalidate",
-            "execution_model": "embedded binary copied to fixed uncached KSEG1 RAM before execution",
+            "execution_model": "embedded fixed-RAM stage owns UART recovery and flash-kernel boot continuation",
             "stage1_load_address": args.uart_stage1_addr if uart_enabled else None,
             "stage1_elf": ({
                 "path": str(args.uart_stage1_elf),
@@ -125,7 +125,7 @@ def main() -> int:
             "Built entirely from source; GPL-adjacent RedBoot binaries are not build inputs.",
             "The 256 KiB wrapper contains active and fallback copies of the same compiled loader.",
             "The hard payload boundary is enforced independently of the selected compatibility policy.",
-            "The flash-resident loader contains no ordinary C UART calls; the UART engine is fixed-linked and executed from reserved uncached RAM.",
+            "The flash-resident loader contains no ordinary C UART calls; fixed-RAM stage 1 owns UART recovery, SPIM kernel validation/copy, fallback, and kernel entry.",
         ],
     }
     args.output.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")

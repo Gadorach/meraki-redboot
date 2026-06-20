@@ -50,6 +50,36 @@ typedef pmos_u32 u32;
 #define CONFIG_UART_RAMLOADER_COUNT_HZ 208000000u
 #endif
 
+#ifndef CONFIG_HARD_PAYLOAD_LIMIT
+#define CONFIG_HARD_PAYLOAD_LIMIT 0x003bffe0u
+#endif
+#ifndef CONFIG_LEGACY_PAYLOAD_LIMIT
+#define CONFIG_LEGACY_PAYLOAD_LIMIT CONFIG_HARD_PAYLOAD_LIMIT
+#endif
+#ifndef CONFIG_UART_RAMLOADER_STAGE1_MAX_SIZE
+#define CONFIG_UART_RAMLOADER_STAGE1_MAX_SIZE 0x00100000u
+#endif
+
+#define SPIM_LOADER_MAGIC 0x4d495053u
+#define SPIM_HEADER_BYTES 32u
+#define STAGE_REASON_PAYLOAD 6u
+#define STAGE_REASON_PAYLOAD_RETURNED 7u
+#define STAGE_STACK_RESERVED_END 0x80004000u
+
+struct spim_header {
+    u32 magic;
+    u32 load_addr;
+    u32 size;
+    u32 entry_addr;
+    u32 expected_crc32;
+    u32 reserved0;
+    u32 reserved1;
+    u32 reserved2;
+};
+
+void uart_stage1_jump_kernel(u32 entry_addr) __attribute__((noreturn));
+void uart_stage1_jump_fallback(u32 fallback_entry, u32 reason) __attribute__((noreturn));
+
 struct ram_header {
     u32 magic0;
     u32 magic1;
@@ -239,6 +269,137 @@ static void cache_prepare_for_execution(u32 start, u32 size)
     __asm__ __volatile__("sync\n\tehb" ::: "memory");
 }
 
+static void uart_put_label_hex(const char *label, u32 value)
+{
+    uart_puts(label);
+    uart_put_hex32(value);
+}
+
+static int ranges_overlap(u32 start_a, u32 end_a, u32 start_b, u32 end_b)
+{
+    return start_a < end_b && start_b < end_a;
+}
+
+static void fallback_to_next_region(u32 fallback_entry, u32 reason, const char *message)
+    __attribute__((noreturn));
+static void fallback_to_next_region(u32 fallback_entry, u32 reason, const char *message)
+{
+    uart_puts("PMOSBOOT FAIL ");
+    uart_puts(message);
+    uart_puts(" FALLBACK=");
+    uart_put_hex32(fallback_entry);
+    uart_puts("\n");
+    uart_stage1_jump_fallback(fallback_entry, reason);
+}
+
+static void read_spim_header(struct spim_header *header, u8 raw[SPIM_HEADER_BYTES],
+                             u32 payload_header_addr)
+{
+    const volatile u8 *source = (const volatile u8 *)payload_header_addr;
+    u32 i;
+    for (i = 0u; i < SPIM_HEADER_BYTES; i++) raw[i] = source[i];
+    header->magic = get_le32(raw + 0u);
+    header->load_addr = get_le32(raw + 4u);
+    header->size = get_le32(raw + 8u);
+    header->entry_addr = get_le32(raw + 12u);
+    header->expected_crc32 = get_le32(raw + 16u);
+    header->reserved0 = get_le32(raw + 20u);
+    header->reserved1 = get_le32(raw + 24u);
+    header->reserved2 = get_le32(raw + 28u);
+}
+
+static void boot_flash_kernel(u32 payload_header_addr, u32 fallback_entry)
+    __attribute__((noreturn));
+static void boot_flash_kernel(u32 payload_header_addr, u32 fallback_entry)
+{
+    struct spim_header header;
+    u8 raw[SPIM_HEADER_BYTES];
+    volatile const u32 *source_words;
+    volatile u32 *destination_words;
+    const u8 *payload_bytes;
+    u32 load_end;
+    u32 stage_cached_start = CONFIG_UART_RAMLOADER_RAM_END;
+    u32 stage_cached_end = stage_cached_start + CONFIG_UART_RAMLOADER_STAGE1_MAX_SIZE;
+    u32 offset;
+#if !defined(CONFIG_CRC_POLICY_OFF)
+    u32 crc;
+#endif
+
+    uart_puts("PMOSBOOT FLASH HEADER=");
+    uart_put_hex32(payload_header_addr);
+    uart_puts("\n");
+    read_spim_header(&header, raw, payload_header_addr);
+
+    if (header.magic != SPIM_LOADER_MAGIC)
+        fallback_to_next_region(fallback_entry, STAGE_REASON_PAYLOAD, "MAGIC");
+    if (header.size == 0u || (header.size & 31u) != 0u)
+        fallback_to_next_region(fallback_entry, STAGE_REASON_PAYLOAD, "SIZE-ALIGN");
+    if (header.size > CONFIG_HARD_PAYLOAD_LIMIT)
+        fallback_to_next_region(fallback_entry, STAGE_REASON_PAYLOAD, "SIZE-HARD");
+#if defined(CONFIG_SIZE_POLICY_LEGACY_STRICT)
+    if (header.size > CONFIG_LEGACY_PAYLOAD_LIMIT)
+        fallback_to_next_region(fallback_entry, STAGE_REASON_PAYLOAD, "SIZE-LEGACY");
+#elif defined(CONFIG_SIZE_POLICY_LEGACY_WARN)
+    if (header.size > CONFIG_LEGACY_PAYLOAD_LIMIT)
+        uart_puts("WARNING: payload exceeds legacy size threshold; continuing within hard slot limit\n");
+#endif
+    if ((header.load_addr >> 28) != 8u)
+        fallback_to_next_region(fallback_entry, STAGE_REASON_PAYLOAD, "LOAD-ADDRESS");
+    load_end = header.load_addr + header.size;
+    if (load_end < header.load_addr)
+        fallback_to_next_region(fallback_entry, STAGE_REASON_PAYLOAD, "LOAD-OVERFLOW");
+    if (ranges_overlap(header.load_addr, load_end, 0x80000000u, STAGE_STACK_RESERVED_END))
+        fallback_to_next_region(fallback_entry, STAGE_REASON_PAYLOAD, "STACK-OVERLAP");
+    if (ranges_overlap(header.load_addr, load_end, stage_cached_start, stage_cached_end))
+        fallback_to_next_region(fallback_entry, STAGE_REASON_PAYLOAD, "STAGE1-OVERLAP");
+
+    uart_puts("PMOSBOOT KERNEL");
+    uart_put_label_hex(" LOAD=", header.load_addr);
+    uart_put_label_hex(" SIZE=", header.size);
+    uart_put_label_hex(" ENTRY=", header.entry_addr);
+    uart_puts("\n");
+
+    payload_bytes = (const u8 *)(payload_header_addr + SPIM_HEADER_BYTES);
+    source_words = (const volatile u32 *)payload_bytes;
+    destination_words = (volatile u32 *)header.load_addr;
+
+#if !defined(CONFIG_CRC_POLICY_OFF)
+    raw[16] = 0u; raw[17] = 0u; raw[18] = 0u; raw[19] = 0u;
+    crc = pmos_crc32_update(0xffffffffu, raw, SPIM_HEADER_BYTES);
+#endif
+    for (offset = 0u; offset < header.size; offset += 32u) {
+#if !defined(CONFIG_CRC_POLICY_OFF)
+        crc = pmos_crc32_update(crc, payload_bytes + offset, 32u);
+#endif
+        destination_words[0] = source_words[0];
+        destination_words[1] = source_words[1];
+        destination_words[2] = source_words[2];
+        destination_words[3] = source_words[3];
+        destination_words[4] = source_words[4];
+        destination_words[5] = source_words[5];
+        destination_words[6] = source_words[6];
+        destination_words[7] = source_words[7];
+        source_words += 8;
+        destination_words += 8;
+    }
+
+#if defined(CONFIG_CRC_POLICY_STRICT)
+    crc = ~crc;
+    if (crc != header.expected_crc32)
+        fallback_to_next_region(fallback_entry, STAGE_REASON_PAYLOAD, "CRC32");
+#elif defined(CONFIG_CRC_POLICY_WARN)
+    crc = ~crc;
+    if (crc != header.expected_crc32)
+        uart_puts("WARNING: payload CRC mismatch; continuing because CRC policy is warn\n");
+#endif
+
+    cache_prepare_for_execution(header.load_addr, header.size);
+    uart_puts("PMOSBOOT EXEC ");
+    uart_put_hex32(header.entry_addr);
+    uart_puts("\n");
+    uart_stage1_jump_kernel(header.entry_addr);
+}
+
 static int abort_to_boot(const char *reason)
 {
     uart_puts("PMOSRAM ABORT ");
@@ -350,3 +511,22 @@ int uart_ramloader_probe_and_run(u32 soc_family)
     uart_puts("PMOSRAM RETURNED\n");
     return 0;
 }
+
+void uart_stage1_main(u32 soc_family, u32 payload_header_addr,
+                      u32 fallback_entry, u32 loader_runtime_base)
+    __attribute__((noreturn));
+void uart_stage1_main(u32 soc_family, u32 payload_header_addr,
+                      u32 fallback_entry, u32 loader_runtime_base)
+{
+    uart_puts("PMOSBOOT CONTEXT LOADER=");
+    uart_put_hex32(loader_runtime_base);
+    uart_puts(" PAYLOAD=");
+    uart_put_hex32(payload_header_addr);
+    uart_puts(" FALLBACK=");
+    uart_put_hex32(fallback_entry);
+    uart_puts("\n");
+    (void)uart_ramloader_probe_and_run(soc_family);
+    uart_puts("PMOSBOOT UART-DONE\n");
+    boot_flash_kernel(payload_header_addr, fallback_entry);
+}
+

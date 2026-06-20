@@ -205,9 +205,10 @@ class SourceContractTests(unittest.TestCase):
         self.assertNotRegex(makefile, r"LOADER_OBJECTS\s*[:+]?=.*uart_ramloader\.o")
         self.assertIn(".incbin UART_STAGE1_FILE", head)
         self.assertIn("UART_STAGE1_LOAD_ADDR", head)
-        self.assertIn("jalr\tt9", head)
+        self.assertIn("jr\tt9", head)
         self.assertIn("PMOSRAM STAGE1 COPY", head)
-        self.assertIn("PMOSRAM STAGE1 RETURN", head)
+        self.assertNotIn("PMOSRAM STAGE1 RETURN", head)
+        self.assertIn("loader_kernel_continue", head)
         self.assertIn("defined(CONFIG_UART_RAMLOADER)", head)
         self.assertIn("UART_STAGE1_LOAD_ADDR", linker)
         self.assertIn(".uart_stage1", linker)
@@ -216,7 +217,7 @@ class SourceContractTests(unittest.TestCase):
         image_validator = (ROOT / "scripts/validate_image.py").read_text()
         self.assertIn('uart_stage_present = "uart_stage1_blob_start" in syms', image_validator)
         self.assertIn("writer_expected = warnings_expected or uart_stage_present", image_validator)
-        self.assertIn('"postmerkos.vcoreiii-linuxloader-build.v5"', manifest)
+        self.assertIn('"postmerkos.vcoreiii-linuxloader-build.v6"', manifest)
 
     def test_uart_stage1_reserves_uncached_alias_above_upload_window(self) -> None:
         makefile = (ROOT / "Makefile").read_text()

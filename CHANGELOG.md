@@ -1,5 +1,24 @@
 # Release record
 
+## 0.6.0 — fixed-RAM boot continuation
+
+- Removed the normal return from fixed-RAM stage 1 to relocatable flash code.
+  Hardware reached `PMOSRAM STAGE1 RETURN` but did not continue through the
+  legacy kernel path.
+- Stage 1 now permanently owns the post-UART boot sequence: SPIM header
+  validation, mandatory and legacy size policies, CRC strict/warn/off policy,
+  flash-to-RAM copy, cache maintenance, kernel entry, and fallback-region jump.
+- The flash shim passes the detected SoC family, current payload-header address,
+  next fallback entry, and loader runtime base before transferring control with
+  a non-returning `jr`.
+- Added explicit `PMOSBOOT` serial diagnostics for context, header location,
+  kernel geometry, execution, and failure/fallback reasons.
+- Added stack and fixed-stage overlap rejection before kernel copy.
+- Added assembly helpers that clear kernel argument registers and preserve the
+  original fallback reason convention in `k0`.
+- Updated fixed-stage validation and regression coverage. Exact GCC 4.7.3
+  builds pass strict, development, permissive, and strict-plus-UART profiles.
+
 ## 0.5.1 — GNU assembler relocatable-label fix
 
 - Corrected the fixed-RAM stage shim so the two serial marker addresses are
@@ -105,7 +124,7 @@
 - Corrected malformed `always_inline` declarations and declaration-order
   warnings inherited from the loader source without changing behavior.
 
-The current source tree implements build-manifest format version 5 and UART
+The current source tree implements build-manifest format version 6 and UART
 recovery protocol version 2. Active capabilities are documented in the README
 and `docs/`.
 

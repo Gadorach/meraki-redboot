@@ -16,20 +16,22 @@ The UART implementation is therefore split into two parts:
 
 1. **Flash stage:** a small assembly-only shim in `src/head.S` remains relative
    to the current loader's runtime `gp`. It prints a progress marker, copies an
-   embedded binary to RAM, and calls it with `jalr`.
+   embedded binary to RAM, passes boot context, and transfers control with a
+   non-returning `jr`.
 2. **RAM stage 1:** `src/uart_ramloader.c` is linked normally at the fixed
-   uncached KSEG1 address `0xa7f00000`. It may safely use C calls, strings, a
-   stack, SHA-256, CRC-32, and timeout helpers.
+   uncached KSEG1 address `0xa7f00000`. It owns UART upload, normal SPIM kernel
+   validation/copy, cache maintenance, fallback selection, and kernel entry.
 
 The upload interval remains the cached KSEG0 range
 `[0x81000000, 0x87f00000)`. Stage 1 occupies the uncached alias of the physical
 top 1 MiB beginning at `0xa7f00000`, so an uploaded program cannot overwrite
 the receiver while it is running.
 
-The flash shim allocates a 32-byte call frame before `jalr`: the low 16 bytes
-are the O32 caller-provided argument area, while saved loader `gp` and SoC state
-are stored at offsets 16 and 20. This prevents a normal GCC prologue from
-clobbering the return context.
+The original v0.5.x return-to-flash path was removed after hardware showed that
+control returned far enough to print `PMOSRAM STAGE1 RETURN` but the legacy
+flash kernel path did not proceed. Stage 1 now receives four register arguments:
+SoC family, payload-header address, next fallback entry, and current loader base.
+It never intentionally returns to the relocatable flash loader.
 
 The build validates that stage 1:
 
@@ -51,20 +53,23 @@ PMOSRAM READY 2 SOC=jaguar1 MAX=... RAM=81000000-87f00000 ...
 ```
 
 If no byte arrives during the default three-second probe interval, stage 1
-returns and the flash loader prints:
+continues directly into the flash-kernel loader:
 
 ```text
-PMOSRAM STAGE1 RETURN
+PMOSBOOT UART-DONE
+PMOSBOOT FLASH HEADER=40040000
+PMOSBOOT KERNEL LOAD=81000000 SIZE=... ENTRY=81000000
+PMOSBOOT EXEC 81000000
 ```
 
-Normal SPIM kernel-header validation and loading then continue.
-
-These markers localize hardware failures:
+A malformed or incomplete UART header prints `PMOSRAM ABORT ...` before the
+same `PMOSBOOT` sequence. These markers localize hardware failures:
 
 - no `STAGE1 COPY`: boot-mode exit/remap or flash-shim problem;
 - `STAGE1 COPY` but no `READY`: stage copy, fixed-RAM address, or stage entry;
-- `READY` but no return: UART receiver/probe path;
-- `STAGE1 RETURN` but no kernel activity: normal SPIM payload path.
+- `READY` but no `UART-DONE`: UART receiver/probe path;
+- `PMOSBOOT FAIL ...`: explicit SPIM header, size, address, CRC, or fallback failure;
+- `PMOSBOOT EXEC` but no kernel output: kernel entry/cache/handoff failure.
 
 ## Build
 
@@ -157,11 +162,11 @@ python3 tools/uart_ramload_send.py \
   --binary .work/recovery/artifacts/recovery-jaguar1.bin \
   --load-address 0x81000000 \
   --entry 0x81000000 \
-  --expected-soc jaguar1
+  --follow
 ```
 
-The sender waits for `PMOSRAM READY 2`, validates the reported SoC family when
-requested, handles partial nonblocking writes, retries NACKed or timed-out
+The sender waits for `PMOSRAM READY 2`, displays the target-reported SoC family,
+handles partial nonblocking writes, retries NACKed or timed-out
 frames, and accepts the final `PMOSRAM VERIFIED` response as an implicit final
 ACK if the explicit ACK was lost. It exits only after verification and
 execution are reported.

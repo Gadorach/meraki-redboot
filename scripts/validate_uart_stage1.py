@@ -109,8 +109,15 @@ def main() -> int:
         relocs = sorted(set(re.findall(r"\bR_MIPS_[A-Z0-9_]+\b", reloc_text)))
         if relocs:
             raise ValueError(f"final stage retains relocations: {', '.join(relocs)}")
-        if b"PMOSRAM READY 2" not in args.elf.read_bytes():
-            raise ValueError("stage lacks its protocol marker")
+        binary = args.elf.read_bytes()
+        for marker in (b"PMOSRAM READY 2", b"PMOSBOOT FLASH HEADER=", b"PMOSBOOT EXEC "):
+            if marker not in binary:
+                raise ValueError(f"stage lacks required marker {marker!r}")
+        symbols = run(args.nm, "-n", str(args.elf))
+        symbol_names = {line.split()[-1] for line in symbols.splitlines() if line.split()}
+        for required in ("uart_stage1_entry", "uart_stage1_main", "uart_stage1_jump_kernel", "uart_stage1_jump_fallback"):
+            if required not in symbol_names:
+                raise ValueError(f"stage lacks required symbol {required}")
         validate_calls(args.objdump, args.elf, address, address + size)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"UART-stage1 validation failed: {exc}", file=sys.stderr)

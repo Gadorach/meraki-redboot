@@ -7,9 +7,9 @@ not require a Linux, OpenWrt, or Buildroot build.
 The loader initializes the SoC, DRAM, SPI mapping, caches, and UART; exits boot
 mode; copies an optional UART engine into a fixed uncached RAM window; offers
 the recovery upload interval from that RAM stage; validates a 32-byte SPIM
-payload header at flash offset `0x40000`; copies the kernel payload to RAM;
-applies the selected CRC and size policies; and enters the declared kernel
-entry point.
+payload header at flash offset `0x40000`; then leaves the fixed-RAM stage in
+control to validate and copy the kernel, apply the selected CRC and size
+policies, and enter the declared kernel entry point.
 
 ## Source-owned output
 
@@ -118,8 +118,9 @@ The default `development` profile includes the UART RAM loader. Pass
 `UART_RAMLOADER=0` to produce a development image without it. The UART engine
 is deliberately **not** linked as callable C inside the relocatable flash
 loader. Instead it is linked at `0xa7f00000`, embedded as data, copied through
-its uncached KSEG1 address after DDR and the stack are live, and entered with an
-assembly `jalr`. This avoids the direct `J/JAL` and absolute-literal behavior of
+its uncached KSEG1 address after DDR and the stack are live, and entered with a
+non-returning assembly `jr`. Stage 1 owns all remaining boot work, including
+normal flash-kernel validation/copy and final kernel entry. This avoids the direct `J/JAL` and absolute-literal behavior of
 the historical GCC 4.7 PIC/no-ABI combination. The pre-kernel `PMOSRAM2`
 protocol provides:
 
@@ -182,17 +183,21 @@ PMOSRAM STAGE1 COPY
 PMOSRAM READY 2 SOC=jaguar1 ...
 ```
 
-If no UART byte arrives during the probe interval, stage 1 returns and the
-flash loader emits:
+If no UART byte arrives during the probe interval, stage 1 remains in control
+and continues directly into the flash-kernel path:
 
 ```text
-PMOSRAM STAGE1 RETURN
+PMOSBOOT UART-DONE
+PMOSBOOT FLASH HEADER=40040000
+PMOSBOOT KERNEL LOAD=81000000 SIZE=... ENTRY=81000000
+PMOSBOOT EXEC 81000000
 ```
 
-Normal payload-header validation and kernel loading then continue. A stop before
-`STAGE1 COPY` points to boot-mode exit/remap; a stop after `STAGE1 COPY` but
-before `READY` points to the copy or fixed-RAM entry; a stop after `READY` is in
-the UART protocol stage.
+A malformed or incomplete UART header prints `PMOSRAM ABORT ...` and then uses
+the same flash-kernel path. A stop before `STAGE1 COPY` points to boot-mode
+exit/remap; a stop after `STAGE1 COPY` but before `READY` points to the copy or
+fixed-RAM entry; a `PMOSBOOT FAIL ...` line identifies header, geometry, CRC, or
+fallback selection failures explicitly.
 
 ## Kernel payload packaging
 
@@ -235,5 +240,6 @@ process in [`docs/HARDWARE-ACCEPTANCE.md`](docs/HARDWARE-ACCEPTANCE.md).
 - [`docs/BOOT-REGION-FORMAT.md`](docs/BOOT-REGION-FORMAT.md)
 - [`docs/SOURCE-PATCHES.md`](docs/SOURCE-PATCHES.md)
 - [`docs/UART-RAMLOADER.md`](docs/UART-RAMLOADER.md)
+- [`docs/RAMLOADER-HARDWARE-TEST.md`](docs/RAMLOADER-HARDWARE-TEST.md)
 - [`payloads/uart-firmware-recovery/README.md`](payloads/uart-firmware-recovery/README.md)
 - [`docs/HARDWARE-ACCEPTANCE.md`](docs/HARDWARE-ACCEPTANCE.md)
