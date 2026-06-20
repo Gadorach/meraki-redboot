@@ -56,6 +56,14 @@ class PreDdrCodegenValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "call/link"):
             VALIDATOR.validate_pre_ddr_object(str(objdump), Path("probe.o"))
 
+    def test_rejects_absolute_jump(self) -> None:
+        td, objdump = self._objdump_script(
+            "   0: 08000010        j       40 <helper>\n"
+        )
+        self.addCleanup(td.cleanup)
+        with self.assertRaisesRegex(ValueError, "absolute J"):
+            VALIDATOR.validate_pre_ddr_object(str(objdump), Path("probe.o"))
+
 
 if __name__ == "__main__":
     unittest.main()

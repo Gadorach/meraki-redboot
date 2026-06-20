@@ -5,8 +5,9 @@ Meraki/Vitesse Luton26 and Jaguar-class switches. It is freestanding and does
 not require a Linux, OpenWrt, or Buildroot build.
 
 The loader initializes the SoC, DRAM, SPI mapping, caches, and UART; exits boot
-mode; offers the optional UART RAM-loader recovery window; validates a 32-byte
-SPIM payload header at flash offset `0x40000`; copies the kernel payload to RAM;
+mode; copies an optional UART engine into a fixed uncached RAM window; offers
+the recovery upload interval from that RAM stage; validates a 32-byte SPIM
+payload header at flash offset `0x40000`; copies the kernel payload to RAM;
 applies the selected CRC and size policies; and enters the declared kernel
 entry point.
 
@@ -18,7 +19,7 @@ The generated boot region contains:
 - two independently placed copies of the same current LinuxLoader build;
 - Luton26 and Jaguar-class hardware initialization;
 - compile-time CRC and payload-size policy paths;
-- optional UART RAM-loader protocol v2;
+- an optional embedded UART stage-1 image, copied to fixed uncached RAM before running protocol v2;
 - no imported executable bootloader body and no post-link binary editing.
 
 Reference binaries may be used by analysis tools to compare structure, but they
@@ -114,8 +115,13 @@ combination that can cross the next owned flash region.
 ## UART recovery build
 
 The default `development` profile includes the UART RAM loader. Pass
-`UART_RAMLOADER=0` to produce a development image without it. The pre-kernel
-`PMOSRAM2` protocol provides:
+`UART_RAMLOADER=0` to produce a development image without it. The UART engine
+is deliberately **not** linked as callable C inside the relocatable flash
+loader. Instead it is linked at `0xa7f00000`, embedded as data, copied through
+its uncached KSEG1 address after DDR and the stack are live, and entered with an
+assembly `jalr`. This avoids the direct `J/JAL` and absolute-literal behavior of
+the historical GCC 4.7 PIC/no-ABI combination. The pre-kernel `PMOSRAM2`
+protocol provides:
 
 - a timer-calibrated probe interval;
 - bounded header, frame, and total-transfer states;
@@ -150,8 +156,12 @@ Diagnostic products are retained alongside them:
 .work/build/development/*.o.s
 .work/build/development/*.o.dis
 .work/build/development/*.o.relocs
+.work/build/development/uart-stage1/uart-stage1.elf
+.work/build/development/uart-stage1/uart-stage1.bin
+.work/build/development/uart-stage1/uart-stage1.elf.dis
 .work/logs/build-distrobox.log
 .work/logs/loader-codegen-validation-development.log
+.work/logs/uart-stage1-validation-development.log
 ```
 
 Run `make support-bundle` after either a successful or failed build to create a
@@ -161,6 +171,28 @@ manifests, and logs without bundling the large compiler binaries.
 The loader image is exactly `0x40000` bytes. The manifest records selected
 policies, geometry, source hashes, toolchain identity and versions,
 boot-region SHA-256, and the UART capability contract.
+
+### Expected development-image serial sequence
+
+After the low-level initialization message, a UART-enabled build should emit:
+
+```text
+Low level initialization complete, exiting boot mode
+PMOSRAM STAGE1 COPY
+PMOSRAM READY 2 SOC=jaguar1 ...
+```
+
+If no UART byte arrives during the probe interval, stage 1 returns and the
+flash loader emits:
+
+```text
+PMOSRAM STAGE1 RETURN
+```
+
+Normal payload-header validation and kernel loading then continue. A stop before
+`STAGE1 COPY` points to boot-mode exit/remap; a stop after `STAGE1 COPY` but
+before `READY` points to the copy or fixed-RAM entry; a stop after `READY` is in
+the UART protocol stage.
 
 ## Kernel payload packaging
 

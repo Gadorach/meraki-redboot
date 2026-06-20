@@ -38,6 +38,9 @@ def main() -> int:
     ap.add_argument("--uart-ram-end", type=integer, required=True)
     ap.add_argument("--uart-probe-timeout-ms", type=integer, required=True)
     ap.add_argument("--uart-interbyte-timeout-ms", type=integer, required=True)
+    ap.add_argument("--uart-stage1-addr", type=integer, required=True)
+    ap.add_argument("--uart-stage1-elf", type=Path)
+    ap.add_argument("--uart-stage1-bin", type=Path)
     ap.add_argument("--compiler", required=True)
     ap.add_argument("--linker", required=True)
     ap.add_argument("--toolchain-id", required=True)
@@ -49,7 +52,9 @@ def main() -> int:
     uart_enabled = enabled(args.uart_ramloader)
     loader_data = args.loader.read_bytes()
     if uart_enabled and b"PMOSRAM READY 2" not in loader_data:
-        raise SystemExit("UART RAM-loader was requested but the compiled loader lacks its v2 marker")
+        raise SystemExit("UART RAM-loader was requested but the embedded stage1 marker is absent")
+    if uart_enabled and (args.uart_stage1_elf is None or args.uart_stage1_bin is None):
+        raise SystemExit("UART RAM-loader requires stage1 ELF and binary metadata")
     if args.uart_ram_start >= args.uart_ram_end:
         raise SystemExit("UART RAM range is invalid")
     compiler_version = subprocess.run(
@@ -62,7 +67,7 @@ def main() -> int:
         [args.linker, "--version"], check=True, text=True, capture_output=True
     ).stdout.splitlines()[0]
     data = {
-        "format": "postmerkos.vcoreiii-linuxloader-build.v4",
+        "format": "postmerkos.vcoreiii-linuxloader-build.v5",
         "toolchain": {
             "id": args.toolchain_id,
             "compiler": args.compiler,
@@ -70,7 +75,7 @@ def main() -> int:
             "compiler_dumpversion": compiler_dumpversion,
             "linker": args.linker,
             "linker_version": linker_version,
-            "code_generation_model": "legacy-mips-pic-no-abicalls",
+            "code_generation_model": "stackless-flash-stage-plus-fixed-ram-uart-stage1",
         },
         "variant": args.variant,
         "policies": {
@@ -92,6 +97,18 @@ def main() -> int:
             "supported_soc_families": ["luton26", "jaguar1"],
             "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
             "cache_maintenance": "mips32r2-dcache-writeback-invalidate-icache-invalidate",
+            "execution_model": "embedded binary copied to fixed uncached KSEG1 RAM before execution",
+            "stage1_load_address": args.uart_stage1_addr if uart_enabled else None,
+            "stage1_elf": ({
+                "path": str(args.uart_stage1_elf),
+                "size": args.uart_stage1_elf.stat().st_size,
+                "sha256": sha(args.uart_stage1_elf),
+            } if uart_enabled else None),
+            "stage1_binary": ({
+                "path": str(args.uart_stage1_bin),
+                "size": args.uart_stage1_bin.stat().st_size,
+                "sha256": sha(args.uart_stage1_bin),
+            } if uart_enabled else None),
         },
         "loader": {
             "path": str(args.loader),
@@ -108,6 +125,7 @@ def main() -> int:
             "Built entirely from source; GPL-adjacent RedBoot binaries are not build inputs.",
             "The 256 KiB wrapper contains active and fallback copies of the same compiled loader.",
             "The hard payload boundary is enforced independently of the selected compatibility policy.",
+            "The flash-resident loader contains no ordinary C UART calls; the UART engine is fixed-linked and executed from reserved uncached RAM.",
         ],
     }
     args.output.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")

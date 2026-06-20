@@ -1,5 +1,50 @@
 # Release record
 
+## 0.5.1 — GNU assembler relocatable-label fix
+
+- Corrected the fixed-RAM stage shim so the two serial marker addresses are
+  formed with explicit `R_MIPS_HI16`/`R_MIPS_LO16` relocations instead of
+  `li register, symbol`. GNU assembler 2.23.2 requires the latter operand to be
+  an absolute assembly-time expression and rejected the v0.5.0 source.
+- Added regression coverage that requires `%hi/%lo` address construction for
+  both `PMOSRAM STAGE1 COPY` and `PMOSRAM STAGE1 RETURN`.
+- Compiled the complete development loader and both recovery payloads with the
+  supplied GCC 4.7.3/binutils 2.23.2 toolchain. The exact legacy build now
+  passes stage validation, flash-loader validation, wrapper generation, and the
+  final 256 KiB image validator.
+- Exact GCC 4.7.3 development output: stage 1 `0x1050` bytes, loader `19048`
+  bytes, boot region `262144` bytes.
+
+## 0.5.0 — fixed-RAM UART stage
+
+- Corrected the first hardware-tested post-initialization failure, where the
+  loader stopped immediately after `Low level initialization complete, exiting
+  boot mode`.
+- Removed ordinary UART C code from the relocatable flash-resident LinuxLoader.
+  GCC 4.7.3 accepted the historical `-fPIC -mno-abicalls` combination but left
+  direct MIPS `J/JAL` targets and absolute literal addresses that did not follow
+  the active/fallback copy's runtime offset.
+- Added a separately linked UART stage-1 executable at fixed uncached address
+  `0xa7f00000`. The flash loader embeds it as data, copies it after DDR and the
+  stack are available, and enters it through an assembly `jalr` shim.
+- Reserved the physical top 1 MiB of the 128 MiB DRAM map for stage 1. UART
+  upload destinations remain below `0x87f00000`; stage 1 uses the uncached KSEG1
+  alias beginning at `0xa7f00000`.
+- Added fixed-stage ELF validation for entry address, size, BSS, dynamic/GOT
+  sections, unresolved symbols, final relocations, and direct MIPS jump/call
+  targets.
+- Strengthened flash-loader validation to reject absolute pre-DDR `J`
+  instructions as well as stack use and call/link instructions.
+- Added serial progress markers `PMOSRAM STAGE1 COPY` and `PMOSRAM STAGE1
+  RETURN` to distinguish flash remap, stage copy/entry, UART timeout, and return
+  failures during hardware testing.
+- Corrected the assembly-to-C O32 call boundary: the shim now reserves the
+  mandatory 16-byte caller argument area and stores its saved `gp`/SoC state
+  above it, preventing GCC stage prologues from overwriting the return context.
+- Added stage-1 ELF, binary, disassembly, validation log, hashes, and load address
+  to the source-local `.work/` outputs and build manifest format v5.
+- Expanded regression coverage for the two-stage execution architecture.
+
 ## 0.4.3
 
 - Forced the remaining CP0/TLB compatibility helpers in
@@ -60,7 +105,7 @@
 - Corrected malformed `always_inline` declarations and declaration-order
   warnings inherited from the loader source without changing behavior.
 
-The current source tree implements boot-region format version 4 and UART
+The current source tree implements build-manifest format version 5 and UART
 recovery protocol version 2. Active capabilities are documented in the README
 and `docs/`.
 
@@ -74,3 +119,4 @@ Development records and prior release notes are maintained under:
 - `docs/history/gcc10-build-corrections.md`
 - `docs/history/gcc10-loader-codegen.md`
 - `docs/history/binutils-bootstrap-v0.4.1.md`
+- `docs/history/uart-fixed-ram-stage-v0.5.0.md`

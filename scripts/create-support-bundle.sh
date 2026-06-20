@@ -24,7 +24,9 @@ while IFS= read -r -d '' file; do
 done < <(find "$work_root/toolchains" -type f -name 'POSTMERKOS-TOOLCHAIN-MANIFEST.txt' -print0 2>/dev/null || true)
 
 cp -a "$root/VERSION" "$root/Makefile" "$stage/project/"
-cp -a "$root/scripts/toolchain-config.sh" "$root/scripts/validate_loader_codegen.py" "$stage/project/"
+cp -a "$root/src/head.S" "$root/src/uart_stage1_entry.S" "$root/src/uart_stage1.lds" "$stage/project/"
+cp -a "$root/scripts/toolchain-config.sh" "$root/scripts/validate_loader_codegen.py" \
+      "$root/scripts/validate_uart_stage1.py" "$stage/project/"
 {
     echo "generated_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "project=$root"

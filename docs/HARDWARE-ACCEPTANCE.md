@@ -18,14 +18,21 @@ power source.
 
 ## UART RAM-loader acceptance
 
-1. Boot a UART-enabled image without host input and measure the probe interval.
-2. Send a malformed header and confirm `PMOSRAM ABORT` followed by normal boot.
-3. Interrupt header and frame transfers and confirm bounded abort and normal
+1. Boot a UART-enabled image without host input and capture the exact sequence:
+   `STAGE1 COPY`, `PMOSRAM READY 2`, approximately three seconds of probe time,
+   and `STAGE1 RETURN` before normal kernel processing.
+2. If a marker is missing, preserve `.work/build/<variant>/uart-stage1/`, the
+   loader disassembly, and `.work/logs/` with `make support-bundle`.
+3. Send a malformed header and confirm `PMOSRAM ABORT` followed by `STAGE1
+   RETURN` and normal boot.
+4. Interrupt header and frame transfers and confirm bounded abort and normal
    boot.
-4. Exercise frame NACK/retry and a duplicate final accepted frame.
-5. Load a non-destructive diagnostic payload on both Luton26 and Jaguar-class
+5. Exercise frame NACK/retry and a duplicate final accepted frame.
+6. Load a non-destructive diagnostic payload on both Luton26 and Jaguar-class
    targets and confirm cache-safe execution and deterministic return behavior.
-6. Attempt a mismatched SoC payload and confirm host and target rejection.
+7. Attempt a mismatched SoC payload and confirm host and target rejection.
+8. Confirm the uploaded payload range remains below `0x87f00000` and the
+   embedded UART engine reports fixed execution at `0xa7f00000`.
 
 ## Recovery dry-run acceptance
 

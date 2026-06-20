@@ -77,7 +77,7 @@ complete log are under `.work/toolchain-build/`. This makes a project checkout
 self-contained and permits direct comparison or archival of the compiler,
 objects, linker products, and logs.
 
-Version 0.4.3 detects a verified toolchain from the former location:
+Version 0.5.0 detects a verified toolchain from the former location:
 
 ```text
 $XDG_CACHE_HOME/postmerkos-vcoreiii/toolchains

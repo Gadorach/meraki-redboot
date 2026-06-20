@@ -28,6 +28,8 @@ def main() -> int:
     ap.add_argument("--uart-probe-timeout-ms", type=parse_int, required=True)
     ap.add_argument("--uart-interbyte-timeout-ms", type=parse_int, required=True)
     ap.add_argument("--uart-count-hz", type=parse_int, required=True)
+    ap.add_argument("--uart-stage1-addr", type=parse_int, required=True)
+    ap.add_argument("--uart-stage1-max-size", type=parse_int, required=True)
     args = ap.parse_args()
 
     if args.fallback_region_size <= 0 or args.fallback_region_size & (args.fallback_region_size - 1):
@@ -57,6 +59,19 @@ def main() -> int:
         ap.error("UART inter-byte timeout must be from 100 through 10000 ms")
     if args.uart_count_hz < 1_000_000:
         ap.error("UART CP0 Count frequency is implausibly low")
+    if bool_value(args.uart_ramloader):
+        if not (0xA0000000 <= args.uart_stage1_addr < 0xC0000000):
+            ap.error("UART stage1 must execute from an uncached KSEG1 address")
+        expected_alias = args.uart_ram_end + 0x20000000
+        if args.uart_stage1_addr != expected_alias:
+            ap.error(
+                "UART stage1 must begin at the uncached alias of uart-ram-end "
+                f"(expected 0x{expected_alias:x})"
+            )
+        if not (0 < args.uart_stage1_max_size <= 0x00100000):
+            ap.error("UART stage1 reserved size must be in 1..0x100000")
+        if args.uart_stage1_addr + args.uart_stage1_max_size > 0xA8000000:
+            ap.error("UART stage1 exceeds the 128 MiB DRAM top boundary")
 
     print(
         "configuration: "
@@ -64,7 +79,8 @@ def main() -> int:
         f"fallback-region=0x{args.fallback_region_size:x} slot-end=0x{args.payload_slot_end:x} "
         f"legacy=0x{args.legacy_payload_limit:x} hard=0x{args.hard_payload_limit:x} "
         f"uart={'enabled' if bool_value(args.uart_ramloader) else 'disabled'} "
-        f"uart-ram=0x{args.uart_ram_start:x}-0x{args.uart_ram_end:x}"
+        f"uart-ram=0x{args.uart_ram_start:x}-0x{args.uart_ram_end:x} "
+        f"stage1=0x{args.uart_stage1_addr:x}+0x{args.uart_stage1_max_size:x}"
     )
     return 0
 

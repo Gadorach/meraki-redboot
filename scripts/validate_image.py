@@ -152,10 +152,12 @@ def main() -> int:
         die("CRC-enabled loader is missing the CRC table")
 
     warnings_expected = args.crc_policy == "warn" or args.size_policy == "legacy-warn"
-    if warnings_expected and "loader_uart_puts" not in syms:
-        die("warning policy selected but assembly UART writer is absent")
-    if not warnings_expected and "loader_uart_puts" in syms:
-        die("UART warning writer was retained in a non-warning build")
+    uart_stage_present = "uart_stage1_blob_start" in syms
+    writer_expected = warnings_expected or uart_stage_present
+    if writer_expected and "loader_uart_puts" not in syms:
+        die("assembly UART writer is required by warnings or the UART stage shim")
+    if not writer_expected and "loader_uart_puts" in syms:
+        die("assembly UART writer was retained without warnings or UART stage support")
 
     print(
         f"validated {args.variant}: crc={args.crc_policy} size={args.size_policy} "

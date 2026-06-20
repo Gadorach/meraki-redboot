@@ -3,7 +3,9 @@ postmerkOS VCore-III LinuxLoader validation
 Current validation targets:
 - Python unit and protocol-contract tests
 - Clang MIPS32r2 structural builds for development, strict, and permissive policies
-- UART-enabled loader object/link validation
+- UART-enabled flash-loader object/link validation
+- Fixed-RAM UART stage entry, bounds, relocation, section, and call-target validation
+- O32 assembly-to-C caller argument-area preservation for the RAM stage entry
 - GNU wrapper-fit recipe exercise
 - Luton26 and Jaguar1 recovery payload structural builds
 - Recovery artifact descriptor and digest validation

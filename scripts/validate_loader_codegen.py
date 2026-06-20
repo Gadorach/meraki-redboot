@@ -32,6 +32,7 @@ def validate_pre_ddr_object(objdump: str, obj: Path) -> None:
     disassembly = run(objdump, "-drw", str(obj))
     stack_offenders: list[str] = []
     call_offenders: list[str] = []
+    absolute_jump_offenders: list[str] = []
     call_mnemonics = {"jal", "jalr", "bal", "bgezal", "bltzal"}
     for line in disassembly.splitlines():
         # Restrict checks to disassembled instruction lines so symbol names
@@ -52,6 +53,8 @@ def validate_pre_ddr_object(objdump: str, obj: Path) -> None:
             instruction_tokens.pop(0)
         if instruction_tokens and instruction_tokens[0] in call_mnemonics:
             call_offenders.append(stripped)
+        if instruction_tokens and instruction_tokens[0] == "j":
+            absolute_jump_offenders.append(stripped)
     problems: list[str] = []
     if stack_offenders:
         excerpt = "\n".join(stack_offenders[:24])
@@ -64,6 +67,12 @@ def validate_pre_ddr_object(objdump: str, obj: Path) -> None:
         problems.append(
             f"pre-DDR initialization still contains call/link instructions:\n{excerpt}\n"
             "A nested call overwrites the assembly caller's return address or forces an ABI frame."
+        )
+    if absolute_jump_offenders:
+        excerpt = "\n".join(absolute_jump_offenders[:24])
+        problems.append(
+            f"pre-DDR initialization contains absolute J instructions:\n{excerpt}\n"
+            "MIPS J targets do not follow the active/fallback loader's runtime offset."
         )
     if problems:
         raise ValueError(
@@ -104,6 +113,21 @@ def validate_entry(readelf: str, elf: Path) -> None:
         raise ValueError(f"{elf}: loader entry point must be link address zero")
 
 
+
+
+def validate_uart_embedding(nm: str, elf: Path) -> None:
+    data = elf.read_bytes()
+    if b"PMOSRAM READY 2" not in data:
+        return
+    output = run(nm, "-n", str(elf))
+    names = {line.split()[-1] for line in output.splitlines() if line.split()}
+    for required in ("uart_stage1_blob_start", "uart_stage1_blob_end"):
+        if required not in names:
+            raise ValueError(f"embedded UART stage1 is missing symbol {required}")
+    if "uart_ramloader_probe_and_run" in names:
+        raise ValueError("ordinary UART C was linked into relocatable flash code")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--elf", type=Path, required=True)
@@ -123,11 +147,12 @@ def main() -> int:
         validate_no_unresolved(args.nm, args.elf)
         validate_final_relocations(args.readelf, args.elf)
         validate_entry(args.readelf, args.elf)
+        validate_uart_embedding(args.nm, args.elf)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"loader-codegen validation failed: {exc}", file=sys.stderr)
         return 1
 
-    print("loader code generation: pinned legacy PIC is fully linked; pre-DDR init is stackless")
+    print("loader code generation: pre-DDR init is stackless; flash UART control flow is assembly-only; UART C is isolated in fixed RAM")
     return 0
 
 

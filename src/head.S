@@ -82,6 +82,21 @@
 #error CONFIG_LEGACY_PAYLOAD_LIMIT must not exceed CONFIG_HARD_PAYLOAD_LIMIT
 #endif
 
+#if defined(CONFIG_UART_RAMLOADER)
+#ifndef UART_STAGE1_FILE
+#error UART_STAGE1_FILE must name the fixed-RAM UART engine binary
+#endif
+#ifndef UART_STAGE1_SIZE
+#error UART_STAGE1_SIZE must be supplied by the build
+#endif
+#ifndef UART_STAGE1_LOAD_ADDR
+#error UART_STAGE1_LOAD_ADDR must be supplied by the build
+#endif
+#if UART_STAGE1_SIZE <= 0
+#error UART_STAGE1_SIZE must be positive
+#endif
+#endif
+
 #define REASON_STARTUP 		0		/* Power up */
 #define REASON_TLB		1		/* TLB exception */
 #define REASON_CACHE		2		/* Cache error */
@@ -155,10 +170,51 @@ __start:bal	10f		/* Figure out where we are */
 	lw	zero, 0(v0)	/* Now take us out of boot mode */
 
 #if defined(CONFIG_UART_RAMLOADER)
-	/* Development recovery hook: after hardware init/boot-mode exit, before
-	 * kernel header validation/copy. Timeout or failed upload returns here. */
-	bal	uart_ramloader_probe_and_run
+	/*
+	 * The full UART engine is ordinary non-PIC C linked for a reserved,
+	 * uncached RAM address.  Copy it out of this relocatable flash image,
+	 * execute it from RAM, then restore the flash loader's runtime GP.
+	 */
+	lui	a0, %hi(loader_uart_stage1_copy_text)
+	addiu	a0, a0, %lo(loader_uart_stage1_copy_text)
+	add	a0, a0, gp
+	bal	loader_uart_puts
+	 nop
+
+	/* O32 requires the caller to provide a 16-byte argument build area at
+	 * 0(sp)..15(sp). Keep loader state above that area so normal GCC stage
+	 * prologues may spill a0-a3 without corrupting the return context. */
+	addiu	sp, sp, -32
+	sw	gp, 16(sp)
+	sw	s7, 20(sp)
+
+	lui	t0, %hi(uart_stage1_blob_start)
+	addiu	t0, t0, %lo(uart_stage1_blob_start)
+	add	t0, t0, gp		/* Source in the active/fallback flash copy */
+	li	t1, UART_STAGE1_LOAD_ADDR	/* Uncached top-of-RAM destination */
+	li	t2, UART_STAGE1_SIZE
+1:	lbu	t3, 0(t0)
+	sb	t3, 0(t1)
+	addiu	t0, t0, 1
+	addiu	t1, t1, 1
+	addiu	t2, t2, -1
+	bnez	t2, 1b
+	 nop
+	sync
+
+	li	t9, UART_STAGE1_LOAD_ADDR
+	jalr	t9
 	 move	a0, s7		/* Pass detected SoC family */
+
+	lw	gp, 16(sp)
+	lw	s7, 20(sp)
+	addiu	sp, sp, 32
+
+	lui	a0, %hi(loader_uart_stage1_return_text)
+	addiu	a0, a0, %lo(loader_uart_stage1_return_text)
+	add	a0, a0, gp
+	bal	loader_uart_puts
+	 nop
 #endif
 
 #if !defined(CONFIG_CRC_POLICY_OFF)
@@ -209,7 +265,7 @@ __start:bal	10f		/* Figure out where we are */
 .endm
 #endif
 
-#if defined(CONFIG_CRC_POLICY_WARN) || defined(CONFIG_SIZE_POLICY_LEGACY_WARN)
+#if defined(CONFIG_CRC_POLICY_WARN) || defined(CONFIG_SIZE_POLICY_LEGACY_WARN) || defined(CONFIG_UART_RAMLOADER)
 /* Print a PIC string through the UART initialized by init_system_*. */
 	.macro loader_warning string_label
 	lui	a0, %hi(\string_label)
@@ -437,9 +493,9 @@ boot_mode_trampoline:
 	jr	ra		/* Continue at 4xxxxxxx */
 	 nop
 
-#if defined(CONFIG_CRC_POLICY_WARN) || defined(CONFIG_SIZE_POLICY_LEGACY_WARN)
+#if defined(CONFIG_CRC_POLICY_WARN) || defined(CONFIG_SIZE_POLICY_LEGACY_WARN) || defined(CONFIG_UART_RAMLOADER)
 /*
- * Minimal assembly UART writer used only for validation warnings. The SoC
+ * Minimal assembly UART writer used by validation warnings and the UART stage shim. The SoC
  * initialization path has already configured the UART to 115200 8N1.
  * Clobbers a0 and t6-t9; callers retain live values in saved registers.
  */
@@ -478,6 +534,12 @@ loader_size_warning_text:
 #if defined(CONFIG_CRC_POLICY_WARN)
 loader_crc_warning_text:
 	.asciz "WARNING: payload CRC mismatch; continuing because CRC policy is warn\n"
+#endif
+#if defined(CONFIG_UART_RAMLOADER)
+loader_uart_stage1_copy_text:
+	.asciz "PMOSRAM STAGE1 COPY\n"
+loader_uart_stage1_return_text:
+	.asciz "PMOSRAM STAGE1 RETURN\n"
 #endif
 	.align	4
 #endif
@@ -549,5 +611,17 @@ crctab:
 #endif
 
 	.align	4
+
+#if defined(CONFIG_UART_RAMLOADER)
+	.section .rodata.uart_stage1, "a", @progbits
+	.align 4
+	.global uart_stage1_blob_start
+uart_stage1_blob_start:
+	.incbin UART_STAGE1_FILE
+	.global uart_stage1_blob_end
+uart_stage1_blob_end:
+	.align 4
+	.previous
+#endif
 
 .global __start

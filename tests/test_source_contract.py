@@ -150,6 +150,9 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("printf '%s/.work", config)
         self.assertIn("support-bundle", makefile)
         self.assertIn("build-native.log", dispatcher)
+        support = (ROOT / "scripts/create-support-bundle.sh").read_text()
+        self.assertIn("validate_uart_stage1.py", support)
+        self.assertIn("uart_stage1.lds", support)
         self.assertIn("Importing verified legacy toolchain", (ROOT / "scripts/install-legacy-toolchain.sh").read_text())
 
     def test_toolchain_bootstrap_disables_recursive_info_generation(self) -> None:
@@ -187,6 +190,41 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("UART_RAMLOADER_development := 1", makefile)
         self.assertIn("UART_RAMLOADER_strict := 0", makefile)
         self.assertIn("UART_RAMLOADER_permissive := 0", makefile)
+
+
+    def test_uart_engine_is_fixed_ram_stage_not_flash_c_code(self) -> None:
+        makefile = (ROOT / "Makefile").read_text()
+        head = (ROOT / "src/head.S").read_text()
+        linker = (ROOT / "src/uart_stage1.lds").read_text()
+        validator = (ROOT / "scripts/validate_uart_stage1.py").read_text()
+        manifest = (ROOT / "scripts/write_manifest.py").read_text()
+
+        self.assertIn("UART_RAMLOADER_STAGE1_ADDR ?= 0xa7f00000", makefile)
+        self.assertIn("STAGE1_CFLAGS", makefile)
+        self.assertIn("UART_STAGE1_ELF", makefile)
+        self.assertNotRegex(makefile, r"LOADER_OBJECTS\s*[:+]?=.*uart_ramloader\.o")
+        self.assertIn(".incbin UART_STAGE1_FILE", head)
+        self.assertIn("UART_STAGE1_LOAD_ADDR", head)
+        self.assertIn("jalr\tt9", head)
+        self.assertIn("PMOSRAM STAGE1 COPY", head)
+        self.assertIn("PMOSRAM STAGE1 RETURN", head)
+        self.assertIn("defined(CONFIG_UART_RAMLOADER)", head)
+        self.assertIn("UART_STAGE1_LOAD_ADDR", linker)
+        self.assertIn(".uart_stage1", linker)
+        self.assertIn("fixed uncached RAM entry", validator)
+        self.assertIn("direct jump/call targets outside", validator)
+        image_validator = (ROOT / "scripts/validate_image.py").read_text()
+        self.assertIn('uart_stage_present = "uart_stage1_blob_start" in syms', image_validator)
+        self.assertIn("writer_expected = warnings_expected or uart_stage_present", image_validator)
+        self.assertIn('"postmerkos.vcoreiii-linuxloader-build.v5"', manifest)
+
+    def test_uart_stage1_reserves_uncached_alias_above_upload_window(self) -> None:
+        makefile = (ROOT / "Makefile").read_text()
+        config = (ROOT / "scripts/check_config.py").read_text()
+        self.assertIn("UART_RAMLOADER_RAM_END ?= 0x87f00000", makefile)
+        self.assertIn("UART_RAMLOADER_STAGE1_ADDR ?= 0xa7f00000", makefile)
+        self.assertIn("expected_alias = args.uart_ram_end + 0x20000000", config)
+        self.assertIn("UART stage1 must begin at the uncached alias", config)
 
     def test_payload_packer_generates_loader_compatible_crc(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -48,6 +48,40 @@ class UartRecoveryContractTests(unittest.TestCase):
         self.assertIn("li\ts7, 1", HEAD_SOURCE)
         self.assertIn("move\ta0, s7", HEAD_SOURCE)
 
+
+    def test_flash_loader_only_copies_and_calls_fixed_ram_stage(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        stage_linker = (ROOT / "src/uart_stage1.lds").read_text(encoding="utf-8")
+        entry_source = (ROOT / "src/uart_stage1_entry.S").read_text(encoding="utf-8")
+        self.assertIn(".incbin UART_STAGE1_FILE", HEAD_SOURCE)
+        self.assertIn("jalr\tt9", HEAD_SOURCE)
+        self.assertNotIn("bal\tuart_ramloader_probe_and_run", HEAD_SOURCE)
+        self.assertNotIn("uart_ramloader.o", makefile.split("LOADER_OBJECTS :=", 1)[1].splitlines()[0])
+        self.assertIn("ENTRY(uart_stage1_entry)", stage_linker)
+        self.assertIn("UART_STAGE1_LOAD_ADDR", stage_linker)
+        self.assertIn("uart_ramloader_probe_and_run", entry_source)
+        self.assertIn("b uart_ramloader_probe_and_run", entry_source)
+        self.assertNotIn("jal uart_ramloader_probe_and_run", entry_source)
+        # O32 callees may use 0(sp)..15(sp) as caller-provided argument slots.
+        # Loader state must therefore be saved above that area.
+        self.assertIn("addiu\tsp, sp, -32", HEAD_SOURCE)
+        self.assertIn("sw\tgp, 16(sp)", HEAD_SOURCE)
+        self.assertIn("sw\ts7, 20(sp)", HEAD_SOURCE)
+        self.assertIn("lw\tgp, 16(sp)", HEAD_SOURCE)
+        self.assertIn("lw\ts7, 20(sp)", HEAD_SOURCE)
+        self.assertIn("addiu\tsp, sp, 32", HEAD_SOURCE)
+        self.assertNotIn("sw\tgp, 0(sp)", HEAD_SOURCE)
+        self.assertNotIn("sw\ts7, 4(sp)", HEAD_SOURCE)
+        # GNU as 2.23.2 requires relocatable label addresses to be formed with
+        # explicit HI16/LO16 relocations; `li reg, label` requires an absolute
+        # assembly-time expression and fails before link.
+        self.assertIn("lui\ta0, %hi(loader_uart_stage1_copy_text)", HEAD_SOURCE)
+        self.assertIn("addiu\ta0, a0, %lo(loader_uart_stage1_copy_text)", HEAD_SOURCE)
+        self.assertIn("lui\ta0, %hi(loader_uart_stage1_return_text)", HEAD_SOURCE)
+        self.assertIn("addiu\ta0, a0, %lo(loader_uart_stage1_return_text)", HEAD_SOURCE)
+        self.assertNotIn("li\ta0, loader_uart_stage1_copy_text", HEAD_SOURCE)
+        self.assertNotIn("li\ta0, loader_uart_stage1_return_text", HEAD_SOURCE)
+
     def test_recovery_enforces_manifest_flash_and_terminal_contracts(self) -> None:
         for token in (
             "PMOSRECOVERY2;SOC=", "PKG_MAGIC1", "PMOSPKG VERIFIED",

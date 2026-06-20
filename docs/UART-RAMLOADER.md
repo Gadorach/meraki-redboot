@@ -1,29 +1,104 @@
 # UART RAM-loader protocol v2
 
 `UART_RAMLOADER=1` adds a bounded pre-kernel serial upload window to the
-source-built VCore-III LinuxLoader. The hook runs after SoC and DRAM
-initialization and before the normal SPIM kernel header is processed.
+source-built VCore-III LinuxLoader. The hook runs only after SoC initialization,
+DDR training, cache setup, stack setup, SPI mapping, and boot-mode exit.
 
-The loader reports its detected SoC family and waits for a protocol-v2 header
-for the configured probe interval. No separate trigger byte is used. The first
-byte received is the first byte of the `PMOSRAM2` header. A malformed header,
-idle frame timeout, overall transfer timeout, digest mismatch, or unsupported
-address returns control to the normal kernel boot path after the UART receive
-FIFO is drained.
+## Two-stage execution model
+
+The flash-resident LinuxLoader is position-dependent at an unknown runtime
+offset because the active and fallback copies can be placed at different
+locations inside the 256 KiB wrapper. GCC 4.7.3 accepts the historical
+`-fPIC -mno-abicalls` combination, but ordinary C calls and literal references
+are not reliably relocatable under that model.
+
+The UART implementation is therefore split into two parts:
+
+1. **Flash stage:** a small assembly-only shim in `src/head.S` remains relative
+   to the current loader's runtime `gp`. It prints a progress marker, copies an
+   embedded binary to RAM, and calls it with `jalr`.
+2. **RAM stage 1:** `src/uart_ramloader.c` is linked normally at the fixed
+   uncached KSEG1 address `0xa7f00000`. It may safely use C calls, strings, a
+   stack, SHA-256, CRC-32, and timeout helpers.
+
+The upload interval remains the cached KSEG0 range
+`[0x81000000, 0x87f00000)`. Stage 1 occupies the uncached alias of the physical
+top 1 MiB beginning at `0xa7f00000`, so an uploaded program cannot overwrite
+the receiver while it is running.
+
+The flash shim allocates a 32-byte call frame before `jalr`: the low 16 bytes
+are the O32 caller-provided argument area, while saved loader `gp` and SoC state
+are stored at offsets 16 and 20. This prevents a normal GCC prologue from
+clobbering the return context.
+
+The build validates that stage 1:
+
+- enters at exactly `0xa7f00000`;
+- fits its reserved 1 MiB window;
+- has no BSS requiring separate initialization;
+- has no GOT, PLT, dynamic-loader state, unresolved symbols, or final
+  relocations;
+- keeps every direct MIPS `J/JAL` target inside its own linked address window.
+
+## Expected serial sequence
+
+A development boot should reach:
+
+```text
+Low level initialization complete, exiting boot mode
+PMOSRAM STAGE1 COPY
+PMOSRAM READY 2 SOC=jaguar1 MAX=... RAM=81000000-87f00000 ...
+```
+
+If no byte arrives during the default three-second probe interval, stage 1
+returns and the flash loader prints:
+
+```text
+PMOSRAM STAGE1 RETURN
+```
+
+Normal SPIM kernel-header validation and loading then continue.
+
+These markers localize hardware failures:
+
+- no `STAGE1 COPY`: boot-mode exit/remap or flash-shim problem;
+- `STAGE1 COPY` but no `READY`: stage copy, fixed-RAM address, or stage entry;
+- `READY` but no return: UART receiver/probe path;
+- `STAGE1 RETURN` but no kernel activity: normal SPIM payload path.
 
 ## Build
 
 ```sh
-make VARIANT=development \
+make all VARIANT=development
+```
+
+Relevant overrides:
+
+```sh
+make all \
+  VARIANT=development \
   UART_RAMLOADER=1 \
   UART_RAMLOADER_MAX_SIZE=0x00400000 \
+  UART_RAMLOADER_RAM_START=0x81000000 \
+  UART_RAMLOADER_RAM_END=0x87f00000 \
+  UART_RAMLOADER_STAGE1_ADDR=0xa7f00000 \
   UART_RAMLOADER_PROBE_TIMEOUT_MS=3000 \
   UART_RAMLOADER_INTERBYTE_TIMEOUT_MS=3000
 ```
 
-The default staging range is the half-open interval
-`[0x81000000, 0x87f00000)`. The entire uploaded object and its entry point must
-fit in that range. The default maximum object size is 4 MiB.
+The stage-1 address must be the uncached KSEG1 alias of
+`UART_RAMLOADER_RAM_END`; the configuration checker rejects inconsistent
+geometry.
+
+Generated stage files are retained under:
+
+```text
+.work/build/development/uart-stage1/uart-stage1.elf
+.work/build/development/uart-stage1/uart-stage1.bin
+.work/build/development/uart-stage1/uart-stage1.elf.dis
+.work/build/development/uart-stage1/uart-stage1.elf.readelf
+.work/logs/uart-stage1-validation-development.log
+```
 
 ## Wire contract
 
@@ -56,10 +131,10 @@ The target acknowledges each accepted sequence. A retransmission is accepted
 only when its sequence, byte count, declared CRC-32, and computed CRC-32 match
 the most recently accepted frame; it is then acknowledged without duplicating
 data. Sequence gaps or CRC failures receive a NACK for the expected sequence.
-After all bytes are
-received, the target verifies whole-object CRC-32 and SHA-256, writes back and
-invalidates the data cache, invalidates the instruction cache, and jumps to the
-validated entry point.
+
+After all bytes are received, the target verifies whole-object CRC-32 and
+SHA-256, writes back and invalidates the data cache, invalidates the instruction
+cache, and jumps to the validated entry point.
 
 Receive time is bounded in three places:
 
@@ -67,14 +142,22 @@ Receive time is bounded in three places:
 - total time for each header or frame block;
 - 15-minute maximum for the complete RAM payload transfer.
 
+No separate magic trigger is used. The first received byte is the first byte of
+the `PMOSRAM2` header. A malformed header, idle timeout, transfer timeout,
+digest mismatch, or unsupported address drains the UART receive FIFO and
+returns to normal kernel boot.
+
 ## Host sender
+
+For an MS42/MS42P Jaguar1 switch:
 
 ```sh
 python3 tools/uart_ramload_send.py \
   --port /dev/ttyUSB0 \
-  --binary .work/recovery/artifacts/recovery-luton26.bin \
+  --binary .work/recovery/artifacts/recovery-jaguar1.bin \
   --load-address 0x81000000 \
-  --entry 0x81000000
+  --entry 0x81000000 \
+  --expected-soc jaguar1
 ```
 
 The sender waits for `PMOSRAM READY 2`, validates the reported SoC family when
@@ -83,10 +166,15 @@ frames, and accepts the final `PMOSRAM VERIFIED` response as an implicit final
 ACK if the explicit ACK was lost. It exits only after verification and
 execution are reported.
 
+Only one process should own the serial port during testing. Because any received
+byte starts header reception, terminal-program setup bytes can intentionally or
+accidentally enter the upload path.
+
 ## Safety properties
 
 - Unknown header flags are rejected.
 - The complete load interval is checked against the configured DRAM range.
+- Stage 1 and uploaded payload memory ranges do not overlap.
 - Header, frame, and whole-object integrity are independently verified.
 - Interrupted receive states are timeout-bounded.
 - Freshly received executable memory receives explicit D-cache and I-cache

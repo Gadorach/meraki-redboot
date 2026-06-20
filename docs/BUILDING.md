@@ -89,7 +89,9 @@ TOOLCHAIN_KEEP_BUILD=1 make toolchain
 1. the selected 256 KiB VCore-III boot region;
 2. its map, symbols, disassemblies, hashes, and manifest;
 3. the Luton26 UART firmware-recovery payload;
-4. the Jaguar1 UART firmware-recovery payload.
+4. the Jaguar1 UART firmware-recovery payload;
+5. when UART recovery is enabled, a fixed-RAM UART stage-1 ELF/binary, its
+   disassembly, validation log, and manifest hashes.
 
 The default `development` profile enables the UART RAM loader. Disable it with:
 
@@ -128,7 +130,8 @@ All generated files are placed under `.work/`:
 .work/toolchains/                 pinned GCC/binutils installations
 .work/toolchain-build/            source-toolchain build log and optional work trees
 .work/downloads/                  checksum-verified GNU source archives
-.work/build/<variant>/            objects, generated assembly, disassembly, relocations, ELFs
+.work/build/<variant>/            flash-loader objects, generated assembly, disassembly, relocations, ELFs
+.work/build/<variant>/uart-stage1/ fixed-RAM UART stage ELF, binary, map and inspections
 .work/out/<variant>/              inspection copies and complete disassemblies
 .work/artifacts/                  flashable boot regions, hashes, manifests
 .work/recovery/build/             recovery payload objects and ELFs
@@ -171,7 +174,10 @@ Every release build also checks:
 - absence of stack-pointer references and nested call/link instructions in the
   pre-DDR initialization objects;
 - absence of dynamic-loader sections and unresolved symbols;
-- absence of relocations in the final linked loader;
+- absence of relocations in the final linked flash loader;
+- no ordinary UART C symbol in the relocatable flash loader;
+- fixed UART stage entry at `0xa7f00000`, no BSS/dynamic/GOT state, and all
+  direct stage calls remaining inside its reserved window;
 - entry point at link address zero;
 - dual-copy wrapper fit and exact 256 KiB image size.
 

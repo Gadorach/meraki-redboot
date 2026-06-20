@@ -22,6 +22,8 @@ UART_RAMLOADER_RAM_END ?= 0x87f00000
 UART_RAMLOADER_PROBE_TIMEOUT_MS ?= 3000
 UART_RAMLOADER_INTERBYTE_TIMEOUT_MS ?= 3000
 UART_RAMLOADER_COUNT_HZ ?= 208000000
+UART_RAMLOADER_STAGE1_ADDR ?= 0xa7f00000
+UART_RAMLOADER_STAGE1_MAX_SIZE ?= 0x00100000
 
 VALID_CRC_POLICIES := strict warn off
 VALID_SIZE_POLICIES := legacy-strict legacy-warn hard-only
@@ -60,6 +62,12 @@ OUT_DIR := $(WORK_ROOT)/out/$(VARIANT)
 ARTIFACT_DIR := $(WORK_ROOT)/artifacts
 LOG_DIR := $(WORK_ROOT)/logs
 SUPPORT_DIR := $(WORK_ROOT)/support
+UART_STAGE1_DIR := $(BUILD_DIR)/uart-stage1
+UART_STAGE1_ENTRY_OBJ := $(UART_STAGE1_DIR)/entry.o
+UART_STAGE1_C_OBJ := $(UART_STAGE1_DIR)/uart_ramloader.o
+UART_STAGE1_ELF := $(UART_STAGE1_DIR)/uart-stage1.elf
+UART_STAGE1_BIN := $(UART_STAGE1_DIR)/uart-stage1.bin
+UART_STAGE1_MAP := $(UART_STAGE1_DIR)/uart-stage1.map
 ARTIFACT := $(ARTIFACT_DIR)/vcoreiii-linuxloader-$(VARIANT).bin
 LOADER_ELF := $(BUILD_DIR)/loader.elf
 LOADER_BIN := $(BUILD_DIR)/loader.bin
@@ -107,6 +115,20 @@ CFLAGS := $(ARCH_FLAGS) $(FREESTANDING_FLAGS) \
 	-std=gnu89 -Wall -Wextra -Werror=implicit-function-declaration \
 	-Wno-unused-function -Wno-unused-parameter -Wno-sign-compare
 
+# The full UART engine is not flash-PIC. It is linked as ordinary C for a
+# fixed uncached top-of-RAM address, embedded as data, and copied there by a
+# small assembly shim after DDR and boot-mode exit are complete.
+STAGE1_CFLAGS := $(ARCH_FLAGS) $(FREESTANDING_FLAGS) \
+	-mno-abicalls -fno-pic -G 0 \
+	-std=gnu89 -Wall -Wextra -Werror=implicit-function-declaration \
+	-Wno-unused-function -Wno-unused-parameter -Wno-sign-compare
+STAGE1_ASFLAGS := $(ARCH_FLAGS) $(FREESTANDING_FLAGS) \
+	-mno-abicalls -fno-pic -G 0 -D__ASSEMBLY__ -x assembler-with-cpp
+STAGE1_LDFLAGS := -EL -m elf32ltsmip -G 0 -static -n -nostdlib \
+	-T src/uart_stage1.lds -Map $(UART_STAGE1_MAP) \
+	--defsym=UART_STAGE1_LOAD_ADDR=$(UART_RAMLOADER_STAGE1_ADDR) \
+	--defsym=UART_STAGE1_MAX_SIZE=$(UART_RAMLOADER_STAGE1_MAX_SIZE)
+
 # Reset-time C runs before writable RAM or a stack exists.  The complete
 # initialization call graph is forced inline in src/init*.c; these options
 # stop GCC from emitting ABI save/restore traffic for s0-s7 in the resulting
@@ -124,9 +146,15 @@ LDFLAGS_WRAPPER := -EL -m elf32ltsmip -G 0 -static -n -nostdlib \
 	-T src/wrapper.lds -Map $(BUILD_DIR)/boot-region.map
 
 LOADER_OBJECTS := $(BUILD_DIR)/head.o $(BUILD_DIR)/init_luton26.o $(BUILD_DIR)/init_jaguar.o
-ifneq ($(filter 1 y yes true,$(UART_RAMLOADER)),)
-LOADER_OBJECTS += $(BUILD_DIR)/uart_ramloader.o
+UART_STAGE1_ENABLED := $(filter 1 y yes true,$(UART_RAMLOADER))
+HEAD_EXTRA_DEPS :=
+ifneq ($(UART_STAGE1_ENABLED),)
+HEAD_EXTRA_DEPS += $(UART_STAGE1_BIN)
 endif
+UART_STAGE1_CPPFLAGS = $(if $(UART_STAGE1_ENABLED),\
+	-DUART_STAGE1_FILE=\"$(abspath $(UART_STAGE1_BIN))\" \
+	-DUART_STAGE1_SIZE=$(shell stat -c %s '$(UART_STAGE1_BIN)' 2>/dev/null || echo 0) \
+	-DUART_STAGE1_LOAD_ADDR=$(UART_RAMLOADER_STAGE1_ADDR),)
 
 .PHONY: all __all-local __loader-local raw image validate inspect variants reference-check check-tools \
 	check-toolchain check-config clean distclean deps toolchain distrobox refresh-source test test-wrapper-fit payload recovery-payloads support-bundle work-layout help
@@ -144,6 +172,8 @@ all:
 	  "UART_RAMLOADER_PROBE_TIMEOUT_MS=$(UART_RAMLOADER_PROBE_TIMEOUT_MS)" \
 	  "UART_RAMLOADER_INTERBYTE_TIMEOUT_MS=$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)" \
 	  "UART_RAMLOADER_COUNT_HZ=$(UART_RAMLOADER_COUNT_HZ)" \
+	  "UART_RAMLOADER_STAGE1_ADDR=$(UART_RAMLOADER_STAGE1_ADDR)" \
+	  "UART_RAMLOADER_STAGE1_MAX_SIZE=$(UART_RAMLOADER_STAGE1_MAX_SIZE)" \
 	  "SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)" "WORK_ROOT=$(WORK_ROOT)"
 
 __loader-local: check-tools check-toolchain check-config image validate
@@ -161,6 +191,7 @@ image: check-tools check-toolchain $(ARTIFACT) \
        $(OUT_DIR)/loader-$(VARIANT).dis \
        $(OUT_DIR)/boot-region-$(VARIANT).elf \
        $(OUT_DIR)/boot-region-$(VARIANT).dis \
+       $(if $(UART_STAGE1_ENABLED),$(OUT_DIR)/uart-stage1-$(VARIANT).elf $(OUT_DIR)/uart-stage1-$(VARIANT).bin $(OUT_DIR)/uart-stage1-$(VARIANT).dis,) \
        $(ARTIFACT).sha256 \
        $(ARTIFACT).manifest.json \
        $(ARTIFACT).manifest.json.sha256
@@ -190,15 +221,47 @@ check-config:
 	  --uart-ram-end '$(UART_RAMLOADER_RAM_END)' \
 	  --uart-probe-timeout-ms '$(UART_RAMLOADER_PROBE_TIMEOUT_MS)' \
 	  --uart-interbyte-timeout-ms '$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)' \
-	  --uart-count-hz '$(UART_RAMLOADER_COUNT_HZ)'
+	  --uart-count-hz '$(UART_RAMLOADER_COUNT_HZ)' \
+	  --uart-stage1-addr '$(UART_RAMLOADER_STAGE1_ADDR)' \
+	  --uart-stage1-max-size '$(UART_RAMLOADER_STAGE1_MAX_SIZE)'
 
-$(BUILD_DIR) $(OUT_DIR) $(ARTIFACT_DIR) $(LOG_DIR) $(SUPPORT_DIR):
+$(BUILD_DIR) $(OUT_DIR) $(ARTIFACT_DIR) $(LOG_DIR) $(SUPPORT_DIR) $(UART_STAGE1_DIR):
 	@mkdir -p $@
 
-$(BUILD_DIR)/head.o: src/head.S | $(BUILD_DIR)
+$(UART_STAGE1_ENTRY_OBJ): src/uart_stage1_entry.S | $(UART_STAGE1_DIR)
+	@echo "  AS      $@"
+	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(STAGE1_ASFLAGS) -c $< -o $@
+	@$(OBJDUMP) -drwC $@ > $@.dis
+	@$(READELF) -rW $@ > $@.relocs
+
+$(UART_STAGE1_C_OBJ): src/uart_ramloader.c include/postmerkos_uart_crypto.h | $(UART_STAGE1_DIR)
+	@echo "  CC      $@ (fixed RAM stage1)"
+	@printf '%s\n' "$(CC) $(STAGE1_CFLAGS) $(POLICY_CPPFLAGS) -c $< -o $@" > $@.cmd
+	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(STAGE1_CFLAGS) $(POLICY_CPPFLAGS) -S $< -o $@.s
+	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(STAGE1_CFLAGS) $(POLICY_CPPFLAGS) -c $< -o $@
+	@$(OBJDUMP) -drwC $@ > $@.dis
+	@$(READELF) -rW $@ > $@.relocs
+
+$(UART_STAGE1_ELF): $(UART_STAGE1_ENTRY_OBJ) $(UART_STAGE1_C_OBJ) src/uart_stage1.lds scripts/validate_uart_stage1.py | $(LOG_DIR)
+	@echo "  LD      $@ (fixed RAM stage1)"
+	@$(LD) $(STAGE1_LDFLAGS) -o $@ $(UART_STAGE1_ENTRY_OBJ) $(UART_STAGE1_C_OBJ)
+	@$(OBJDUMP) -drwC $@ > $@.dis
+	@$(READELF) -aW $@ > $@.readelf
+	@python3 scripts/validate_uart_stage1.py --elf $@ --objdump '$(OBJDUMP)' \
+	  --readelf '$(READELF)' --nm '$(NM)' \
+	  --load-address '$(UART_RAMLOADER_STAGE1_ADDR)' \
+	  --max-size '$(UART_RAMLOADER_STAGE1_MAX_SIZE)' 2>&1 | tee '$(LOG_DIR)/uart-stage1-validation-$(VARIANT).log'
+
+$(UART_STAGE1_BIN): $(UART_STAGE1_ELF)
+	@echo "  OBJCOPY $@"
+	@$(OBJCOPY) -O binary $< $@
+	@test $$(stat -c %s $@) -gt 0
+	@test $$(stat -c %s $@) -le $$(( $(UART_RAMLOADER_STAGE1_MAX_SIZE) ))
+
+$(BUILD_DIR)/head.o: src/head.S $(HEAD_EXTRA_DEPS) | $(BUILD_DIR)
 	@echo "  AS      $@ ($(CRC_POLICY)/$(SIZE_POLICY))"
-	@printf '%s\n' "$(CC) $(ASFLAGS) $(POLICY_CPPFLAGS) -c $< -o $@" > $@.cmd
-	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(ASFLAGS) $(POLICY_CPPFLAGS) -c $< -o $@
+	@printf '%s\n' "$(CC) $(ASFLAGS) $(POLICY_CPPFLAGS) $(UART_STAGE1_CPPFLAGS) -c $< -o $@" > $@.cmd
+	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(ASFLAGS) $(POLICY_CPPFLAGS) $(UART_STAGE1_CPPFLAGS) -c $< -o $@
 	@$(OBJDUMP) -drwC $@ > $@.dis
 	@$(READELF) -rW $@ > $@.relocs
 
@@ -215,14 +278,6 @@ $(BUILD_DIR)/init_jaguar.o: src/init_jaguar.c src/init.h include/asm/mipsregs.h 
 	@printf '%s\n' "$(CC) $(PRE_DDR_CFLAGS) -c $< -o $@" > $@.cmd
 	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(PRE_DDR_CFLAGS) -S $< -o $@.s
 	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(PRE_DDR_CFLAGS) -c $< -o $@
-	@$(OBJDUMP) -drwC $@ > $@.dis
-	@$(READELF) -rW $@ > $@.relocs
-
-$(BUILD_DIR)/uart_ramloader.o: src/uart_ramloader.c | $(BUILD_DIR)
-	@echo "  CC      $@"
-	@printf '%s\n' "$(CC) $(CFLAGS) $(POLICY_CPPFLAGS) -c $< -o $@" > $@.cmd
-	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(CFLAGS) $(POLICY_CPPFLAGS) -S $< -o $@.s
-	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(CFLAGS) $(POLICY_CPPFLAGS) -c $< -o $@
 	@$(OBJDUMP) -drwC $@ > $@.dis
 	@$(READELF) -rW $@ > $@.relocs
 
@@ -290,6 +345,15 @@ $(OUT_DIR)/boot-region-$(VARIANT).elf: $(WRAPPER_ELF) | $(OUT_DIR)
 $(OUT_DIR)/boot-region-$(VARIANT).dis: $(WRAPPER_ELF) | $(OUT_DIR)
 	@$(OBJDUMP) -drwC $< > $@
 
+$(OUT_DIR)/uart-stage1-$(VARIANT).elf: $(UART_STAGE1_ELF) | $(OUT_DIR)
+	@cp -f $< $@
+
+$(OUT_DIR)/uart-stage1-$(VARIANT).bin: $(UART_STAGE1_BIN) | $(OUT_DIR)
+	@cp -f $< $@
+
+$(OUT_DIR)/uart-stage1-$(VARIANT).dis: $(UART_STAGE1_ELF) | $(OUT_DIR)
+	@$(OBJDUMP) -drwC $< > $@
+
 $(ARTIFACT).sha256: $(ARTIFACT)
 	@sha256sum $< > $@
 
@@ -305,6 +369,8 @@ $(ARTIFACT).manifest.json: $(ARTIFACT) $(LOADER_BIN)
 	  --uart-ram-end '$(UART_RAMLOADER_RAM_END)' \
 	  --uart-probe-timeout-ms '$(UART_RAMLOADER_PROBE_TIMEOUT_MS)' \
 	  --uart-interbyte-timeout-ms '$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)' \
+	  --uart-stage1-addr '$(UART_RAMLOADER_STAGE1_ADDR)' \
+	  $(if $(UART_STAGE1_ENABLED),--uart-stage1-elf '$(UART_STAGE1_ELF)' --uart-stage1-bin '$(UART_STAGE1_BIN)',) \
 	  --compiler '$(CC)' --linker '$(LD)' \
 	  --toolchain-id "$$(./scripts/toolchain-env.sh --print-id)" \
 	  --loader $(LOADER_BIN) --image $(ARTIFACT) --output $@
@@ -347,6 +413,7 @@ work-layout:
 	@echo "Objects:       $(BUILD_DIR)"
 	@echo "Inspection:    $(OUT_DIR)"
 	@echo "Artifacts:     $(ARTIFACT_DIR)"
+	@echo "UART stage1:   $(UART_STAGE1_DIR)"
 	@echo "Recovery:      $(WORK_ROOT)/recovery"
 	@echo "Logs:          $(LOG_DIR)"
 
@@ -380,6 +447,8 @@ distrobox:
 	  "UART_RAMLOADER_PROBE_TIMEOUT_MS=$(UART_RAMLOADER_PROBE_TIMEOUT_MS)" \
 	  "UART_RAMLOADER_INTERBYTE_TIMEOUT_MS=$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)" \
 	  "UART_RAMLOADER_COUNT_HZ=$(UART_RAMLOADER_COUNT_HZ)" \
+	  "UART_RAMLOADER_STAGE1_ADDR=$(UART_RAMLOADER_STAGE1_ADDR)" \
+	  "UART_RAMLOADER_STAGE1_MAX_SIZE=$(UART_RAMLOADER_STAGE1_MAX_SIZE)" \
 	  "SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)" "WORK_ROOT=$(WORK_ROOT)"
 
 test-wrapper-fit:
@@ -432,5 +501,6 @@ help:
 	  '  .work/build/<variant>/          Objects, assembly, relocations and ELF files' \
 	  '  .work/out/<variant>/            Inspection copies and disassemblies' \
 	  '  .work/artifacts/                Flashable boot region and manifests' \
+	  '  .work/build/<variant>/uart-stage1/ Fixed-RAM UART engine and diagnostics' \
 	  '  .work/recovery/artifacts/       UART recovery payloads' \
 	  '  .work/logs/                     Build and validation logs'
