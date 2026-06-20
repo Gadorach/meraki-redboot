@@ -38,6 +38,7 @@ typedef pmos_u32 u32;
 #define KNOWN_FLAGS (FLAG_FULL_FLASH | FLAG_DRY_RUN | FLAG_FORCE_UNTESTED)
 #define COUNT_HZ 208000000u
 #define INTERBYTE_TIMEOUT_MS 3000u
+#define PACKAGE_HEADER_TIMEOUT_MS 30000u
 #define OBJECT_TRANSFER_TIMEOUT_MS (45u * 60u * 1000u)
 #define CONFIRM_TIMEOUT_MS 60000u
 #define SPI_STATUS_WIP 0x01u
@@ -958,7 +959,7 @@ void recovery_main(void)
     puts_b(" MAX_MANIFEST="); hex32(MAX_MANIFEST); puts_b("\n");
     puts_b("PMOSREC DESCRIPTOR "); puts_b(recovery_descriptor); puts_b("\n");
 
-    if (!recv_exact(raw, PACKAGE_HEADER_BYTES, INTERBYTE_TIMEOUT_MS)) {
+    if (!recv_exact(raw, PACKAGE_HEADER_BYTES, PACKAGE_HEADER_TIMEOUT_MS)) {
         puts_b("PMOSREC RESULT ERROR PACKAGE-HEADER-TIMEOUT\n"); halt();
     }
     parse_package_header(&header, raw);

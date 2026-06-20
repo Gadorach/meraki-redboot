@@ -194,3 +194,8 @@ Development records and prior release notes are maintained under:
 - Initialises stack, global pointer, and BSS before entering C recovery code.
 - Added build-time and structural assertions that `_start` is exactly `0x81000000`.
 - Added a machine-readable `flat-binary-byte-zero-v1` payload entry contract.
+## Unreleased — UART recovery package-header handoff
+
+- Increased the initial PMOSPKG package-header receive grace period to 30 seconds.
+- Kept per-frame interbyte timeout behavior unchanged.
+- Documented that hosts must wait for the complete `PMOSREC DESCRIPTOR` line before sending binary data, preventing RX FIFO overrun while the polling recovery stage is still transmitting startup text.

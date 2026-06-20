@@ -171,7 +171,8 @@ class UartRecoveryContractTests(unittest.TestCase):
             "PMOSREC RESULT SUCCESS", "PMOSREC RESULT ERROR",
             "spi_verify_full", "spi_read_id", "spi_wait_ready", "FLASH-PROTECTED",
             "spi_check_completion", "FLASH-FLAG-", "accepted_jedec_ids",
-            "OBJECT_TRANSFER_TIMEOUT_MS", "CONFIRM_TIMEOUT_MS", "struct pmos_timer",
+            "PACKAGE_HEADER_TIMEOUT_MS", "OBJECT_TRANSFER_TIMEOUT_MS",
+            "CONFIRM_TIMEOUT_MS", "struct pmos_timer",
             "image_sha256", "manifest_sha256", "target_family", "boot_chain",
             "uart_firmware", "flash_geometry", "accepted_models",
             "MANIFEST-RECOVERY-CAPABILITY", "MANIFEST-LOADER-DIGEST",
@@ -179,6 +180,8 @@ class UartRecoveryContractTests(unittest.TestCase):
             self.assertIn(token, RECOVERY_SOURCE)
         self.assertNotIn("current-artifact-validated", RECOVERY_SOURCE)
         self.assertNotIn("historically-validated", RECOVERY_SOURCE)
+        self.assertIn("recv_exact(raw, PACKAGE_HEADER_BYTES, PACKAGE_HEADER_TIMEOUT_MS)", RECOVERY_SOURCE)
+        self.assertNotIn("recv_exact(raw, PACKAGE_HEADER_BYTES, INTERBYTE_TIMEOUT_MS)", RECOVERY_SOURCE)
 
 
     def test_duplicate_frames_are_exact_and_wrap_safe(self) -> None:
