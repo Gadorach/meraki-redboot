@@ -27,6 +27,7 @@ def main() -> int:
     ap.add_argument("--uart-ram-end", type=parse_int, required=True)
     ap.add_argument("--uart-probe-timeout-ms", type=parse_int, required=True)
     ap.add_argument("--uart-interbyte-timeout-ms", type=parse_int, required=True)
+    ap.add_argument("--uart-menu-timeout-ms", type=parse_int, required=True)
     ap.add_argument("--uart-count-hz", type=parse_int, required=True)
     ap.add_argument("--uart-stage1-addr", type=parse_int, required=True)
     ap.add_argument("--uart-stage1-max-size", type=parse_int, required=True)
@@ -57,6 +58,8 @@ def main() -> int:
         ap.error("UART probe timeout must be from 100 through 10000 ms")
     if not (100 <= args.uart_interbyte_timeout_ms <= 10000):
         ap.error("UART inter-byte timeout must be from 100 through 10000 ms")
+    if not (1000 <= args.uart_menu_timeout_ms <= 30000):
+        ap.error("UART menu timeout must be from 1000 through 30000 ms")
     if args.uart_count_hz < 1_000_000:
         ap.error("UART CP0 Count frequency is implausibly low")
     if bool_value(args.uart_ramloader):
@@ -80,6 +83,7 @@ def main() -> int:
         f"legacy=0x{args.legacy_payload_limit:x} hard=0x{args.hard_payload_limit:x} "
         f"uart={'enabled' if bool_value(args.uart_ramloader) else 'disabled'} "
         f"uart-ram=0x{args.uart_ram_start:x}-0x{args.uart_ram_end:x} "
+        f"menu-ms={args.uart_menu_timeout_ms} "
         f"stage1=0x{args.uart_stage1_addr:x}+0x{args.uart_stage1_max_size:x}"
     )
     return 0

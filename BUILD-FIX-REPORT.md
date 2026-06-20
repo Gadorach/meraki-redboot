@@ -1,24 +1,13 @@
-# VCore-III LinuxLoader v0.6.0 boot-continuation fix
+# v0.7.0 build fix report
 
-## Hardware finding
+Implemented an explicit stage-2 boot menu and embedded both platform recovery
+programs. A trigger byte only opens the menu; a second explicit `1` or `2` is
+required within five seconds. Timeout/invalid input continues normal boot.
+Fatal kernel-image checks launch the matching embedded recovery.
 
-The v0.5.1 fixed-RAM UART stage executed and returned successfully enough for
-the flash loader to print `PMOSRAM STAGE1 RETURN`, but the following legacy
-flash-resident kernel path did not produce kernel output. This proved the UART
-stage copy, entry, timer, and return transfer, but not the final kernel handoff.
+The fixed-stage ELF now separates executable code, normal data, and embedded
+recovery bytes. The flash loader similarly places the enlarged stage blob after
+its GP-relative section, avoiding GCC 4.7.3 small-data relocation overflow.
 
-## Correction
-
-Stage 1 no longer returns to relocatable flash code. The flash shim passes the
-payload-header and fallback-region addresses and transfers control with `jr`.
-The fixed-RAM stage then performs the original equivalent operations itself:
-
-- SPIM magic, size, alignment, hard-boundary, and load-address validation;
-- legacy size strict/warn/hard-only policy;
-- CRC strict/warn/off policy over the zeroed-CRC header and padded payload;
-- flash-to-RAM copy;
-- D-cache writeback/invalidate and I-cache invalidation;
-- zero-argument kernel jump;
-- fallback-region jump with the original `k0` reason values on failure.
-
-Explicit `PMOSBOOT` markers now identify each handoff stage and error reason.
+Exact development build: stage 39,952 bytes; loader 54,816 bytes; boot region
+262,144 bytes.

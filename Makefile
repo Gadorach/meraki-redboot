@@ -21,6 +21,7 @@ UART_RAMLOADER_RAM_START ?= 0x81000000
 UART_RAMLOADER_RAM_END ?= 0x87f00000
 UART_RAMLOADER_PROBE_TIMEOUT_MS ?= 3000
 UART_RAMLOADER_INTERBYTE_TIMEOUT_MS ?= 3000
+UART_MENU_TIMEOUT_MS ?= 5000
 UART_RAMLOADER_COUNT_HZ ?= 208000000
 UART_RAMLOADER_STAGE1_ADDR ?= 0xa7f00000
 UART_RAMLOADER_STAGE1_MAX_SIZE ?= 0x00100000
@@ -62,9 +63,15 @@ OUT_DIR := $(WORK_ROOT)/out/$(VARIANT)
 ARTIFACT_DIR := $(WORK_ROOT)/artifacts
 LOG_DIR := $(WORK_ROOT)/logs
 SUPPORT_DIR := $(WORK_ROOT)/support
+RECOVERY_BUILD_DIR := $(WORK_ROOT)/recovery/build
+RECOVERY_ARTIFACT_DIR := $(WORK_ROOT)/recovery/artifacts
+RECOVERY_STAMP := $(WORK_ROOT)/recovery/.built
+RECOVERY_LUTON26_BIN := $(RECOVERY_ARTIFACT_DIR)/recovery-luton26.bin
+RECOVERY_JAGUAR1_BIN := $(RECOVERY_ARTIFACT_DIR)/recovery-jaguar1.bin
 UART_STAGE1_DIR := $(BUILD_DIR)/uart-stage1
 UART_STAGE1_ENTRY_OBJ := $(UART_STAGE1_DIR)/entry.o
 UART_STAGE1_C_OBJ := $(UART_STAGE1_DIR)/uart_ramloader.o
+UART_STAGE1_RECOVERY_OBJ := $(UART_STAGE1_DIR)/recovery_blobs.o
 UART_STAGE1_ELF := $(UART_STAGE1_DIR)/uart-stage1.elf
 UART_STAGE1_BIN := $(UART_STAGE1_DIR)/uart-stage1.bin
 UART_STAGE1_MAP := $(UART_STAGE1_DIR)/uart-stage1.map
@@ -96,6 +103,7 @@ POLICY_CPPFLAGS := \
 	-DCONFIG_UART_RAMLOADER_RAM_END=$(UART_RAMLOADER_RAM_END) \
 	-DCONFIG_UART_RAMLOADER_PROBE_TIMEOUT_MS=$(UART_RAMLOADER_PROBE_TIMEOUT_MS) \
 	-DCONFIG_UART_RAMLOADER_INTERBYTE_TIMEOUT_MS=$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS) \
+	-DCONFIG_UART_MENU_TIMEOUT_MS=$(UART_MENU_TIMEOUT_MS) \
 	-DCONFIG_UART_RAMLOADER_COUNT_HZ=$(UART_RAMLOADER_COUNT_HZ) \
 	-DCONFIG_UART_RAMLOADER_STAGE1_MAX_SIZE=$(UART_RAMLOADER_STAGE1_MAX_SIZE)
 
@@ -152,6 +160,10 @@ HEAD_EXTRA_DEPS :=
 ifneq ($(UART_STAGE1_ENABLED),)
 HEAD_EXTRA_DEPS += $(UART_STAGE1_BIN)
 endif
+UART_STAGE1_RECOVERY_CPPFLAGS = \
+	-DRECOVERY_LUTON26_FILE=\"$(abspath $(RECOVERY_LUTON26_BIN))\" \
+	-DRECOVERY_JAGUAR1_FILE=\"$(abspath $(RECOVERY_JAGUAR1_BIN))\"
+
 UART_STAGE1_CPPFLAGS = $(if $(UART_STAGE1_ENABLED),\
 	-DUART_STAGE1_FILE=\"$(abspath $(UART_STAGE1_BIN))\" \
 	-DUART_STAGE1_SIZE=$(shell stat -c %s '$(UART_STAGE1_BIN)' 2>/dev/null || echo 0) \
@@ -172,6 +184,7 @@ all:
 	  "UART_RAMLOADER_RAM_START=$(UART_RAMLOADER_RAM_START)" "UART_RAMLOADER_RAM_END=$(UART_RAMLOADER_RAM_END)" \
 	  "UART_RAMLOADER_PROBE_TIMEOUT_MS=$(UART_RAMLOADER_PROBE_TIMEOUT_MS)" \
 	  "UART_RAMLOADER_INTERBYTE_TIMEOUT_MS=$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)" \
+	  "UART_MENU_TIMEOUT_MS=$(UART_MENU_TIMEOUT_MS)" \
 	  "UART_RAMLOADER_COUNT_HZ=$(UART_RAMLOADER_COUNT_HZ)" \
 	  "UART_RAMLOADER_STAGE1_ADDR=$(UART_RAMLOADER_STAGE1_ADDR)" \
 	  "UART_RAMLOADER_STAGE1_MAX_SIZE=$(UART_RAMLOADER_STAGE1_MAX_SIZE)" \
@@ -222,6 +235,7 @@ check-config:
 	  --uart-ram-end '$(UART_RAMLOADER_RAM_END)' \
 	  --uart-probe-timeout-ms '$(UART_RAMLOADER_PROBE_TIMEOUT_MS)' \
 	  --uart-interbyte-timeout-ms '$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)' \
+	  --uart-menu-timeout-ms '$(UART_MENU_TIMEOUT_MS)' \
 	  --uart-count-hz '$(UART_RAMLOADER_COUNT_HZ)' \
 	  --uart-stage1-addr '$(UART_RAMLOADER_STAGE1_ADDR)' \
 	  --uart-stage1-max-size '$(UART_RAMLOADER_STAGE1_MAX_SIZE)'
@@ -243,15 +257,22 @@ $(UART_STAGE1_C_OBJ): src/uart_ramloader.c include/postmerkos_uart_crypto.h | $(
 	@$(OBJDUMP) -drwC $@ > $@.dis
 	@$(READELF) -rW $@ > $@.relocs
 
-$(UART_STAGE1_ELF): $(UART_STAGE1_ENTRY_OBJ) $(UART_STAGE1_C_OBJ) src/uart_stage1.lds scripts/validate_uart_stage1.py | $(LOG_DIR)
+$(UART_STAGE1_RECOVERY_OBJ): src/uart_stage1_recovery_blobs.S $(RECOVERY_LUTON26_BIN) $(RECOVERY_JAGUAR1_BIN) | $(UART_STAGE1_DIR)
+	@echo "  AS      $@ (embedded Luton26/Jaguar1 recovery)"
+	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(STAGE1_ASFLAGS) $(UART_STAGE1_RECOVERY_CPPFLAGS) -c $< -o $@
+	@$(OBJDUMP) -drwC $@ > $@.dis
+	@$(READELF) -rW $@ > $@.relocs
+
+$(UART_STAGE1_ELF): $(UART_STAGE1_ENTRY_OBJ) $(UART_STAGE1_C_OBJ) $(UART_STAGE1_RECOVERY_OBJ) src/uart_stage1.lds scripts/validate_uart_stage1.py | $(LOG_DIR)
 	@echo "  LD      $@ (fixed RAM stage1)"
-	@$(LD) $(STAGE1_LDFLAGS) -o $@ $(UART_STAGE1_ENTRY_OBJ) $(UART_STAGE1_C_OBJ)
+	@$(LD) $(STAGE1_LDFLAGS) -o $@ $(UART_STAGE1_ENTRY_OBJ) $(UART_STAGE1_C_OBJ) $(UART_STAGE1_RECOVERY_OBJ)
 	@$(OBJDUMP) -drwC $@ > $@.dis
 	@$(READELF) -aW $@ > $@.readelf
-	@python3 scripts/validate_uart_stage1.py --elf $@ --objdump '$(OBJDUMP)' \
+	@set -o pipefail; python3 scripts/validate_uart_stage1.py --elf $@ --objdump '$(OBJDUMP)' \
 	  --readelf '$(READELF)' --nm '$(NM)' \
 	  --load-address '$(UART_RAMLOADER_STAGE1_ADDR)' \
-	  --max-size '$(UART_RAMLOADER_STAGE1_MAX_SIZE)' 2>&1 | tee '$(LOG_DIR)/uart-stage1-validation-$(VARIANT).log'
+	  --max-size '$(UART_RAMLOADER_STAGE1_MAX_SIZE)' 2>&1 | tee '$(LOG_DIR)/uart-stage1-validation-$(VARIANT).log'; \
+	  rc=$${PIPESTATUS[0]}; test $$rc -eq 0
 
 $(UART_STAGE1_BIN): $(UART_STAGE1_ELF)
 	@echo "  OBJCOPY $@"
@@ -370,8 +391,9 @@ $(ARTIFACT).manifest.json: $(ARTIFACT) $(LOADER_BIN)
 	  --uart-ram-end '$(UART_RAMLOADER_RAM_END)' \
 	  --uart-probe-timeout-ms '$(UART_RAMLOADER_PROBE_TIMEOUT_MS)' \
 	  --uart-interbyte-timeout-ms '$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)' \
+	  --uart-menu-timeout-ms '$(UART_MENU_TIMEOUT_MS)' \
 	  --uart-stage1-addr '$(UART_RAMLOADER_STAGE1_ADDR)' \
-	  $(if $(UART_STAGE1_ENABLED),--uart-stage1-elf '$(UART_STAGE1_ELF)' --uart-stage1-bin '$(UART_STAGE1_BIN)',) \
+	  $(if $(UART_STAGE1_ENABLED),--uart-stage1-elf '$(UART_STAGE1_ELF)' --uart-stage1-bin '$(UART_STAGE1_BIN)' --recovery-luton26-bin '$(RECOVERY_LUTON26_BIN)' --recovery-jaguar1-bin '$(RECOVERY_JAGUAR1_BIN)',) \
 	  --compiler '$(CC)' --linker '$(LD)' \
 	  --toolchain-id "$$(./scripts/toolchain-env.sh --print-id)" \
 	  --loader $(LOADER_BIN) --image $(ARTIFACT) --output $@
@@ -404,9 +426,20 @@ payload:
 	   --max-payload-size '$(HARD_PAYLOAD_LIMIT)' --metadata "$$out.json"; \
 	 python3 tools/mkvcoreiii_payload.py verify "$$out" --max-payload-size '$(HARD_PAYLOAD_LIMIT)'
 
-recovery-payloads: check-tools check-toolchain
+$(RECOVERY_STAMP): payloads/uart-firmware-recovery/recovery.c \
+                    payloads/uart-firmware-recovery/Makefile \
+                    payloads/uart-firmware-recovery/linker.ld \
+                    payloads/uart-firmware-recovery/write_descriptor.py \
+                    include/postmerkos_uart_crypto.h | check-tools check-toolchain
 	@$(MAKE) -C payloads/uart-firmware-recovery CROSS_COMPILE='$(CROSS_COMPILE)' \
-	  BUILD_DIR='$(WORK_ROOT)/recovery/build' ARTIFACT_DIR='$(WORK_ROOT)/recovery/artifacts' all
+	  BUILD_DIR='$(RECOVERY_BUILD_DIR)' ARTIFACT_DIR='$(RECOVERY_ARTIFACT_DIR)' all
+	@mkdir -p '$(dir $(RECOVERY_STAMP))'
+	@touch '$(RECOVERY_STAMP)'
+
+$(RECOVERY_LUTON26_BIN) $(RECOVERY_JAGUAR1_BIN): $(RECOVERY_STAMP)
+	@test -s '$@'
+
+recovery-payloads: $(RECOVERY_STAMP)
 
 work-layout:
 	@echo "Work root:      $(WORK_ROOT)"
@@ -447,6 +480,7 @@ distrobox:
 	  "UART_RAMLOADER_RAM_END=$(UART_RAMLOADER_RAM_END)" \
 	  "UART_RAMLOADER_PROBE_TIMEOUT_MS=$(UART_RAMLOADER_PROBE_TIMEOUT_MS)" \
 	  "UART_RAMLOADER_INTERBYTE_TIMEOUT_MS=$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)" \
+	  "UART_MENU_TIMEOUT_MS=$(UART_MENU_TIMEOUT_MS)" \
 	  "UART_RAMLOADER_COUNT_HZ=$(UART_RAMLOADER_COUNT_HZ)" \
 	  "UART_RAMLOADER_STAGE1_ADDR=$(UART_RAMLOADER_STAGE1_ADDR)" \
 	  "UART_RAMLOADER_STAGE1_MAX_SIZE=$(UART_RAMLOADER_STAGE1_MAX_SIZE)" \
@@ -471,9 +505,9 @@ help:
 	  'Standalone VCore-III LinuxLoader (Meraki RedBoot) builder' \
 	  '' \
 	  'Named profiles:' \
-	  '  make all VARIANT=strict       CRC strict; legacy size strict; hard slot limit' \
-	  '  make all VARIANT=development  CRC warn; legacy size warn; hard slot limit (default)' \
-	  '  make all VARIANT=permissive   CRC off/copy-only; hard slot limit only' \
+	  '  make all VARIANT=strict       CRC strict; legacy/alignment strict; hard slot limit' \
+	  '  make all VARIANT=development  CRC warn; unaligned size warn+round; hard limit (default)' \
+	  '  make all VARIANT=permissive   CRC off; unaligned size warn+round; hard limit only' \
 	  '' \
 	  'Custom policies:' \
 	  '  make all VARIANT=custom CRC_POLICY=warn SIZE_POLICY=hard-only' \
@@ -503,5 +537,5 @@ help:
 	  '  .work/out/<variant>/            Inspection copies and disassemblies' \
 	  '  .work/artifacts/                Flashable boot region and manifests' \
 	  '  .work/build/<variant>/uart-stage1/ Fixed-RAM UART engine and diagnostics' \
-	  '  .work/recovery/artifacts/       UART recovery payloads' \
+	  '  .work/recovery/artifacts/       Embedded platform firmware recovery payloads' \
 	  '  .work/logs/                     Build and validation logs'

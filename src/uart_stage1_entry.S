@@ -20,12 +20,3 @@ uart_stage1_jump_kernel:
     jr t9
      move a3, zero
     .end uart_stage1_jump_kernel
-
-    .global uart_stage1_jump_fallback
-    .ent uart_stage1_jump_fallback
-uart_stage1_jump_fallback:
-    move t9, a0
-    move k0, a1
-    jr t9
-     nop
-    .end uart_stage1_jump_fallback

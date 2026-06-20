@@ -621,7 +621,7 @@ crctab:
 	.align	4
 
 #if defined(CONFIG_UART_RAMLOADER)
-	.section .rodata.uart_stage1, "a", @progbits
+	.section .uart_stage1_blob, "a", @progbits
 	.align 4
 	.global uart_stage1_blob_start
 uart_stage1_blob_start:

@@ -5,11 +5,11 @@ Meraki/Vitesse Luton26 and Jaguar-class switches. It is freestanding and does
 not require a Linux, OpenWrt, or Buildroot build.
 
 The loader initializes the SoC, DRAM, SPI mapping, caches, and UART; exits boot
-mode; copies an optional UART engine into a fixed uncached RAM window; offers
-the recovery upload interval from that RAM stage; validates a 32-byte SPIM
-payload header at flash offset `0x40000`; then leaves the fixed-RAM stage in
-control to validate and copy the kernel, apply the selected CRC and size
-policies, and enter the declared kernel entry point.
+mode; copies a fixed-RAM stage containing a boot menu and both platform recovery
+programs; offers a three-second menu trigger followed by a five-second explicit
+selection window; then either runs the UART executable uploader, launches the
+matching firmware recovery, or validates and boots the SPIM kernel at flash
+offset `0x40000`.
 
 ## Source-owned output
 
@@ -19,7 +19,7 @@ The generated boot region contains:
 - two independently placed copies of the same current LinuxLoader build;
 - Luton26 and Jaguar-class hardware initialization;
 - compile-time CRC and payload-size policy paths;
-- an optional embedded UART stage-1 image, copied to fixed uncached RAM before running protocol v2;
+- an optional fixed-RAM stage containing the UART uploader and both platform-specific firmware recovery images;
 - no imported executable bootloader body and no post-link binary editing.
 
 Reference binaries may be used by analysis tools to compare structure, but they
@@ -71,7 +71,7 @@ make distrobox
 ```
 
 A successful default build produces the selected boot-region image and both
-Luton26/Jaguar1 UART recovery programs.
+Luton26/Jaguar1 recovery programs; UART-enabled loaders embed both programs.
 
 If a v0.4.0 bootstrap stopped while generating `bfd.info`, force a clean
 toolchain retry with:
@@ -86,9 +86,9 @@ The checksum-verified source downloads remain cached.
 
 | Profile | CRC policy | Legacy size policy | UART RAM loader | Hard slot boundary |
 |---|---|---|---|---|
-| `strict` | reject mismatch | reject above threshold | disabled | reject |
-| `development` | warn and continue | warn and continue | enabled | reject |
-| `permissive` | CRC code omitted | threshold omitted | disabled | reject |
+| `strict` | reject mismatch | reject threshold excess and unaligned size | disabled | reject |
+| `development` | report mismatch and continue | warn, round unaligned size to 32 bytes, and continue | enabled | reject |
+| `permissive` | CRC code omitted | omit legacy threshold; warn and round unaligned size | disabled | reject |
 
 ```sh
 make all VARIANT=strict
@@ -133,7 +133,7 @@ protocol provides:
 - detected SoC-family reporting.
 
 The companion `PMOSPKG2` recovery payloads are built separately for Luton26 and
-Jaguar-class SPI register maps. They validate the release package, exact model,
+Jaguar-class SPI register maps and embedded into every UART-enabled stage. They validate the release package, exact model,
 loader digest, firmware layout, flash geometry, JEDEC ID, protection and status
 state, and payload descriptor before the destructive confirmation and full-NOR
 write path.
@@ -175,29 +175,45 @@ boot-region SHA-256, and the UART capability contract.
 
 ### Expected development-image serial sequence
 
-After the low-level initialization message, a UART-enabled build should emit:
+With no input, stage 1 prints the probe marker, waits three seconds, and continues
+normal boot:
 
 ```text
 Low level initialization complete, exiting boot mode
 PMOSRAM STAGE1 COPY
-PMOSRAM READY 2 SOC=jaguar1 ...
+PMOSBOOT CONTEXT LOADER=... PAYLOAD=40040000 FALLBACK=40400000
+PMOSBOOT MENU-PROBE TIMEOUT_MS=00000bb8
+PMOSBOOT PASS-MENU-PROBE: NO INPUT; CONTINUING NORMAL BOOT
+PMOSBOOT PASS-HEADER-ADDRESS: ADDRESS: 0x40040000
+...
+PMOSBOOT PASS-CRC: EXPECTED: ... | GOT: ...
+PMOSBOOT PASS-EXEC: ENTRY: 0x81000000
 ```
 
-If no UART byte arrives during the probe interval, stage 1 remains in control
-and continues directly into the flash-kernel path:
+Any byte during the probe opens the menu. The trigger byte is discarded; a new
+explicit option must arrive within five seconds:
 
 ```text
-PMOSBOOT UART-DONE
-PMOSBOOT FLASH HEADER=40040000
-PMOSBOOT KERNEL LOAD=81000000 SIZE=... ENTRY=81000000
-PMOSBOOT EXEC 81000000
+PMOSBOOT MENU 1=UART-RAMLOADER 2=FW-RECOVERY
+PMOSBOOT MENU-READY TIMEOUT_MS=00001388
 ```
 
-A malformed or incomplete UART header prints `PMOSRAM ABORT ...` and then uses
-the same flash-kernel path. A stop before `STAGE1 COPY` points to boot-mode
-exit/remap; a stop after `STAGE1 COPY` but before `READY` points to the copy or
-fixed-RAM entry; a `PMOSBOOT FAIL ...` line identifies header, geometry, CRC, or
-fallback selection failures explicitly.
+`1` enters a persistent `PMOSRAM READY 2` upload listener. `2` copies and runs
+the embedded recovery matching the detected SoC. Invalid input or no explicit
+selection prints `WARN-MENU-*` and resumes normal boot. Fatal flash-image checks
+print the exact `FAIL-*` values and automatically launch the matching embedded
+recovery rather than chaining to the historical flash fallback.
+
+
+### Historical unaligned kernel compatibility
+
+The original 32-byte assembly copy loop rounded an unaligned declared payload
+size up implicitly. Development and permissive builds now reproduce that
+behavior explicitly: they emit `WARN-SIZE-ALIGN`, calculate an effective size
+with `(declared + 31) & ~31`, and use that effective size for hard-boundary,
+overlap, CRC, copy, and cache checks. Strict builds emit `FAIL-SIZE-ALIGN` and
+fall back. Zero length and every hard safety boundary remain unconditional
+failures.
 
 ## Kernel payload packaging
 

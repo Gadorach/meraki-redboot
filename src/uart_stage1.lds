@@ -7,12 +7,19 @@ SECTIONS
     {
         KEEP(*(.text.uart_stage1_entry))
         *(.text*)
+    }
+    .uart_stage1_data : ALIGN(4)
+    {
         *(.rodata*)
         *(.srodata*)
         *(.data*)
         *(.sdata*)
         *(.lit4*)
         *(.lit8*)
+    }
+    .uart_recovery : ALIGN(4)
+    {
+        KEEP(*(.uart_recovery))
     }
     __uart_stage1_end = .;
 

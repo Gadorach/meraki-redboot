@@ -1,13 +1,10 @@
-postmerkOS VCore-III LinuxLoader validation
-
-Current validation targets:
-- Python unit and protocol-contract tests
-- Clang MIPS32r2 structural builds for development, strict, and permissive policies
-- UART-enabled flash-loader object/link validation
-- Fixed-RAM UART stage entry, bounds, relocation, section, and call-target validation
-- O32 assembly-to-C caller argument-area preservation for the RAM stage entry
-- GNU wrapper-fit recipe exercise
-- Luton26 and Jaguar1 recovery payload structural builds
-- Recovery artifact descriptor and digest validation
-
-Run: make test
+Release validation requirements:
+- exact GNU GCC 4.7.3 and binutils 2.23.2 toolchain identity
+- stackless pre-DDR initialization and assembly-only flash-stage UART control
+- fixed-RAM code/data/recovery section bounds and in-stage direct calls
+- embedded Luton26 and Jaguar1 recovery symbols, markers, and digests
+- explicit 3-second menu trigger plus 5-second option timeout
+- structured PASS/WARN/FAIL/SKIP image diagnostics
+- historical 32-byte rounded copy in non-strict size profiles
+- final dual-copy 256 KiB wrapper validation
+- source, protocol, sender, and structural test suites

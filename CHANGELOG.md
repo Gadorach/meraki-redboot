@@ -1,5 +1,52 @@
 # Release record
 
+## 0.7.0 — explicit stage-2 menu and embedded platform recovery
+
+- Replaced the automatic UART-header probe with a two-step boot menu. Any byte
+  received during the three-second probe opens the menu, but the trigger byte is
+  discarded and an explicit `1` or `2` must be entered within five seconds.
+- Menu option `1` enters the persistent PMOSRAM executable uploader. Menu option
+  `2` copies and executes the firmware-recovery program matching the detected
+  Luton26 or Jaguar1 SoC.
+- Invalid input or menu timeout continues normal flash-kernel boot, preventing
+  incidental UART noise from indefinitely stopping startup.
+- Embedded both recovery binaries inside the fixed-RAM stage. Fatal flash-kernel
+  validation failures now launch the matching embedded recovery directly rather
+  than jumping to the historical next-flash-region fallback.
+- Retained the dual loader copies in the 256 KiB wrapper; both complete copies,
+  including both recovery payloads, still fit with substantial free space.
+- Kept structured PASS/WARN/FAIL/SKIP diagnostics for flash-kernel and UART
+  image checks, including expected/observed or declared/effective values.
+- Updated the host RAM uploader to trigger the menu and select option `1`
+  automatically; added `tools/uart_boot_menu.py` for manual option selection.
+- Split fixed-stage code, data, and embedded binaries into separate ELF sections
+  so call validation never interprets payload bytes as MIPS instructions.
+- Exact GCC 4.7.3/binutils 2.23.2 development build passes with a 39,952-byte
+  fixed-RAM stage, 54,816-byte loader copy, and 262,144-byte boot region.
+
+## 0.6.1 — historical size rounding and structured image diagnostics
+
+- Changed unaligned SPIM kernel sizes from an unconditional failure into the
+  historical 32-byte rounded-copy behavior for `development`, `permissive`, and
+  non-strict custom profiles. The declared size is rounded up only for transfer,
+  CRC, boundary, overlap, and cache-maintenance calculations.
+- Kept zero size, rounding overflow, hard-slot overflow, invalid load/entry
+  geometry, stack overlap, stage overlap, and strict-profile unaligned size as
+  fail-closed checks.
+- Added structured `PASS`, `WARN`, `FAIL`, and `SKIP` diagnostics with actual
+  compared values for every flash-kernel header, size, address, overlap, copy,
+  CRC, cache, and execution check.
+- Added the same detailed diagnostics to UART executable header validation and
+  final object CRC-32/SHA-256 verification. Per-frame transfer success remains
+  represented by compact ACK lines; retransmission failures now include the
+  expected and observed sequence, CRC, or remaining length.
+- Preserved the protocol-v2 `PMOSRAM VERIFIED` and `PMOSRAM EXEC` markers so
+  existing host senders remain compatible.
+- Fixed the fixed-stage validation recipe so a validator failure piped through
+  `tee` propagates its real exit status instead of allowing the build to continue.
+- Exact GCC 4.7.3/binutils 2.23.2 development build and all structural profiles
+  pass with the expanded diagnostics.
+
 ## 0.6.0 — fixed-RAM boot continuation
 
 - Removed the normal return from fixed-RAM stage 1 to relocatable flash code.
@@ -124,7 +171,7 @@
 - Corrected malformed `always_inline` declarations and declaration-order
   warnings inherited from the loader source without changing behavior.
 
-The current source tree implements build-manifest format version 6 and UART
+The current source tree implements build-manifest format version 7 and UART
 recovery protocol version 2. Active capabilities are documented in the README
 and `docs/`.
 

@@ -19,6 +19,8 @@ common=(--target=mipsel-linux-gnu -march=mips32r2 -mabi=32 -msoft-float -mno-abi
   -Os -nostdinc -I"$root/include" -I"$root/src")
 stage1_addr=0xa7f00000
 stage1_max=0x00100000
+printf 'PMOSRECOVERY2;SOC=luton26;STRUCTURAL\n' > "$tmp/recovery-luton26.bin"
+printf 'PMOSRECOVERY2;SOC=jaguar1;STRUCTURAL\n' > "$tmp/recovery-jaguar1.bin"
 
 if [[ -n ${PROFILE_FILTER:-} ]]; then read -r -a profiles <<<"$PROFILE_FILTER"; else profiles=(strict development permissive strict-uart); fi
 for variant in "${profiles[@]}"; do
@@ -37,6 +39,7 @@ for variant in "${profiles[@]}"; do
          -DCONFIG_UART_RAMLOADER_RAM_END=0x87f00000 \
          -DCONFIG_UART_RAMLOADER_PROBE_TIMEOUT_MS=3000 \
          -DCONFIG_UART_RAMLOADER_INTERBYTE_TIMEOUT_MS=3000 \
+         -DCONFIG_UART_MENU_TIMEOUT_MS=5000 \
          -DCONFIG_UART_RAMLOADER_COUNT_HZ=208000000)
 
   dir="$tmp/$variant"
@@ -48,9 +51,13 @@ for variant in "${profiles[@]}"; do
       -c "$root/src/uart_stage1_entry.S" -o "$dir/stage1-entry.o"
     clang "${common[@]}" -std=gnu89 -fno-pic -G0 "${defs[@]}" \
       -c "$root/src/uart_ramloader.c" -o "$dir/stage1-c.o"
+    clang "${common[@]}" -D__ASSEMBLY__ -x assembler-with-cpp \
+      -DRECOVERY_LUTON26_FILE=\"$tmp/recovery-luton26.bin\" \
+      -DRECOVERY_JAGUAR1_FILE=\"$tmp/recovery-jaguar1.bin\" \
+      -c "$root/src/uart_stage1_recovery_blobs.S" -o "$dir/stage1-recovery.o"
     ld.lld -m elf32ltsmip -static -nostdlib -T "$root/src/uart_stage1.lds" \
       --defsym=UART_STAGE1_LOAD_ADDR=$stage1_addr --defsym=UART_STAGE1_MAX_SIZE=$stage1_max \
-      "$dir/stage1-entry.o" "$dir/stage1-c.o" -o "$dir/uart-stage1.elf"
+      "$dir/stage1-entry.o" "$dir/stage1-c.o" "$dir/stage1-recovery.o" -o "$dir/uart-stage1.elf"
     llvm-objcopy -O binary "$dir/uart-stage1.elf" "$dir/uart-stage1.bin"
     python3 "$root/scripts/validate_uart_stage1.py" --elf "$dir/uart-stage1.elf" \
       --objdump llvm-objdump --readelf "$readelf_tool" --nm "$nm_tool" \

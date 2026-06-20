@@ -1,0 +1,23 @@
+/* Embedded platform-specific firmware recovery programs for fixed-RAM stage 1. */
+#ifndef RECOVERY_LUTON26_FILE
+#error RECOVERY_LUTON26_FILE must name the Luton26 recovery binary
+#endif
+#ifndef RECOVERY_JAGUAR1_FILE
+#error RECOVERY_JAGUAR1_FILE must name the Jaguar1 recovery binary
+#endif
+
+    .section .uart_recovery, "a", @progbits
+    .balign 4
+    .global recovery_luton26_blob_start
+    .global recovery_luton26_blob_end
+recovery_luton26_blob_start:
+    .incbin RECOVERY_LUTON26_FILE
+recovery_luton26_blob_end:
+    .balign 4
+
+    .global recovery_jaguar1_blob_start
+    .global recovery_jaguar1_blob_end
+recovery_jaguar1_blob_start:
+    .incbin RECOVERY_JAGUAR1_FILE
+recovery_jaguar1_blob_end:
+    .balign 4

@@ -55,10 +55,12 @@ def validate_calls(objdump: str, elf: Path, start: int, end: int) -> None:
         if not re.match(r"^\s*[0-9a-fA-F]+:\s", line):
             continue
         # GNU objdump normally prints:  a7f00020: 0c... jal a7f00100 <...>
+        instruction_address = int(line.split(":", 1)[0].strip(), 16)
+        if not (start <= instruction_address < end):
+            continue
         match = re.search(r"\b(?:j|jal)\s+(?:0x)?([0-9a-fA-F]+)\b", line)
         if not match:
             continue
-        instruction_address = int(line.split(":", 1)[0].strip(), 16)
         target = int(match.group(1), 16)
         # Some MIPS objdump versions print only the encoded low 28 bits for
         # J/JAL. At runtime the CPU supplies the upper nibble from PC+4.
@@ -93,11 +95,19 @@ def main() -> int:
             raise ValueError(f"forbidden dynamic/GOT sections: {', '.join(forbidden)}")
         if ".uart_stage1" not in sec:
             raise ValueError("missing .uart_stage1 output section")
-        address, size = sec[".uart_stage1"]
+        address, code_size = sec[".uart_stage1"]
         if address != args.load_address:
             raise ValueError(
                 f".uart_stage1 begins at 0x{address:08x}, expected 0x{args.load_address:08x}"
             )
+        stage_end = address + code_size
+        for section_name in (".uart_stage1_data", ".uart_recovery"):
+            if section_name in sec:
+                section_address, section_size = sec[section_name]
+                if section_address < stage_end:
+                    raise ValueError(f"{section_name} overlaps a prior stage section")
+                stage_end = max(stage_end, section_address + section_size)
+        size = stage_end - address
         if size <= 0 or size > args.max_size:
             raise ValueError(
                 f"stage size 0x{size:x} does not fit reserved 0x{args.max_size:x}-byte window"
@@ -110,15 +120,40 @@ def main() -> int:
         if relocs:
             raise ValueError(f"final stage retains relocations: {', '.join(relocs)}")
         binary = args.elf.read_bytes()
-        for marker in (b"PMOSRAM READY 2", b"PMOSBOOT FLASH HEADER=", b"PMOSBOOT EXEC "):
+        for marker in (
+            b"PMOSRAM READY 2",
+            b"PMOSBOOT",
+            b"PMOSRAM",
+            b"PASS",
+            b"WARN",
+            b"FAIL",
+            b"HEADER-ADDRESS",
+            b"MAGIC",
+            b"SIZE-ALIGN",
+            b"COPY",
+            b"CRC",
+            b"IMAGE-SHA256",
+            b"EXEC",
+            b"UART-RAMLOADER",
+            b"MENU-PROBE",
+            b"MENU-READY",
+            b"FW-RECOVERY",
+            b"RECOVERY-COPY",
+            b"PMOSRECOVERY2;SOC=luton26",
+            b"PMOSRECOVERY2;SOC=jaguar1",
+        ):
             if marker not in binary:
                 raise ValueError(f"stage lacks required marker {marker!r}")
         symbols = run(args.nm, "-n", str(args.elf))
         symbol_names = {line.split()[-1] for line in symbols.splitlines() if line.split()}
-        for required in ("uart_stage1_entry", "uart_stage1_main", "uart_stage1_jump_kernel", "uart_stage1_jump_fallback"):
+        for required in (
+            "uart_stage1_entry", "uart_stage1_main", "uart_stage1_jump_kernel",
+            "recovery_luton26_blob_start", "recovery_luton26_blob_end",
+            "recovery_jaguar1_blob_start", "recovery_jaguar1_blob_end",
+        ):
             if required not in symbol_names:
                 raise ValueError(f"stage lacks required symbol {required}")
-        validate_calls(args.objdump, args.elf, address, address + size)
+        validate_calls(args.objdump, args.elf, address, address + code_size)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"UART-stage1 validation failed: {exc}", file=sys.stderr)
         return 1

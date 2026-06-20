@@ -166,6 +166,12 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("make -j\"$jobs\" MAKEINFO=true all-gcc", installer)
         self.assertIn("make MAKEINFO=true install-gcc", installer)
 
+
+    def test_uart_stage_validator_failure_survives_tee(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("set -o pipefail; python3 scripts/validate_uart_stage1.py", makefile)
+        self.assertIn("PIPESTATUS[0]", makefile)
+
     def test_make_all_dispatches_to_optional_distrobox(self) -> None:
         makefile = (ROOT / "Makefile").read_text()
         dispatcher = (ROOT / "scripts/build-dispatch.sh").read_text()
@@ -217,7 +223,7 @@ class SourceContractTests(unittest.TestCase):
         image_validator = (ROOT / "scripts/validate_image.py").read_text()
         self.assertIn('uart_stage_present = "uart_stage1_blob_start" in syms', image_validator)
         self.assertIn("writer_expected = warnings_expected or uart_stage_present", image_validator)
-        self.assertIn('"postmerkos.vcoreiii-linuxloader-build.v6"', manifest)
+        self.assertIn('"postmerkos.vcoreiii-linuxloader-build.v7"', manifest)
 
     def test_uart_stage1_reserves_uncached_alias_above_upload_window(self) -> None:
         makefile = (ROOT / "Makefile").read_text()
