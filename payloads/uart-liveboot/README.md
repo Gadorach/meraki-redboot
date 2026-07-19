@@ -18,7 +18,7 @@ The legacy MIPS boot-parameter workspace is compacted into physical
 exception vectors and avoids the decompressed kernel beginning at physical
 `0x00001000`.
 
-The PMOSLIVE binary is linked at `0x86c00000`. A transport-only preprocessor
+Separate Luton26 and Jaguar1 PMOSLIVE binaries are linked at `0x86c00000`. A transport-only preprocessor
 mode excludes PMOSREC's SPI, erase, program, preflight, confirmation, and flash
 main-loop code before compilation. Link-time garbage collection and post-link
 marker checks provide an additional verification layer.
@@ -26,7 +26,8 @@ marker checks provide an additional verification layer.
 ## Runtime platform identity
 
 PMOSLIVE passes the exact package target model using the normal Linux command
-line as `postmerkos.model=MS42` or `postmerkos.model=MS42P`.  This remains part
+line. Luton26 accepts `MS22`, `MS22P`, `MS220-8`, `MS220-8P`, `MS220-24`,
+or `MS220-24P`; Jaguar1 currently accepts `MS42` or `MS42P`.  This remains part
 of the standard MIPS argc/argv handoff; it is not a private register ABI.  The
 retail userspace may use the value only while `postmerkos.live=1` is active and
 only after validating it against the exact board profile table.  Physical

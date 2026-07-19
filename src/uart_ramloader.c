@@ -86,6 +86,8 @@ extern const u8 recovery_luton26_blob_start[];
 extern const u8 recovery_luton26_blob_end[];
 extern const u8 recovery_jaguar1_blob_start[];
 extern const u8 recovery_jaguar1_blob_end[];
+extern const u8 liveboot_luton26_blob_start[];
+extern const u8 liveboot_luton26_blob_end[];
 extern const u8 liveboot_jaguar1_blob_start[];
 extern const u8 liveboot_jaguar1_blob_end[];
 
@@ -592,21 +594,32 @@ static void launch_embedded_liveboot(u32 soc_family, const char *source_check)
     __attribute__((noreturn));
 static void launch_embedded_liveboot(u32 soc_family, const char *source_check)
 {
-    const u8 *source = liveboot_jaguar1_blob_start;
-    const u8 *end = liveboot_jaguar1_blob_end;
+    const u8 *source;
+    const u8 *end;
+    const char *soc_name;
     volatile u8 *destination = (volatile u8 *)EMBEDDED_LIVEBOOT_LOAD_ADDR;
     u32 size;
     u32 i;
 
-    if (soc_family != RAMLOADER_SOC_JAGUAR1) {
-        report_pair("PMOSBOOT", "FAIL", "LIVEBOOT-SOC",
-                    "EXPECTED", RAMLOADER_SOC_JAGUAR1, "GOT", soc_family);
+    if (soc_family == RAMLOADER_SOC_LUTON26) {
+        source = liveboot_luton26_blob_start;
+        end = liveboot_luton26_blob_end;
+        soc_name = "luton26";
+    } else if (soc_family == RAMLOADER_SOC_JAGUAR1) {
+        source = liveboot_jaguar1_blob_start;
+        end = liveboot_jaguar1_blob_end;
+        soc_name = "jaguar1";
+    } else {
+        report_prefix("PMOSBOOT", "FAIL", "LIVEBOOT-SOC");
+        uart_puts("SUPPORTED: 00000001,00000002 | GOT: ");
+        uart_put_hex32(soc_family);
+        uart_puts("\n");
         persistent_uart_ramloader(soc_family, "LIVEBOOT-UNSUPPORTED-SOC");
     }
     size = (u32)end - (u32)source;
     report_prefix("PMOSBOOT", "INFO", "LIVEBOOT");
     uart_puts("SOURCE: "); uart_puts(source_check);
-    uart_puts(" | SOC: jaguar1 | FLASH: DISABLED\n");
+    uart_puts(" | SOC: "); uart_puts(soc_name); uart_puts(" | FLASH: DISABLED\n");
     if (size == 0u || size > CONFIG_UART_RAMLOADER_MAX_SIZE) {
         report_pair("PMOSBOOT", "FAIL", "LIVEBOOT-SIZE",
                     "MAX", CONFIG_UART_RAMLOADER_MAX_SIZE, "GOT", size);

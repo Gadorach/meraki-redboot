@@ -73,6 +73,7 @@ RECOVERY_JAGUAR1_BIN := $(RECOVERY_ARTIFACT_DIR)/recovery-jaguar1.bin
 LIVEBOOT_BUILD_DIR := $(WORK_ROOT)/liveboot/build
 LIVEBOOT_ARTIFACT_DIR := $(WORK_ROOT)/liveboot/artifacts
 LIVEBOOT_STAMP := $(WORK_ROOT)/liveboot/.built
+LIVEBOOT_LUTON26_BIN := $(LIVEBOOT_ARTIFACT_DIR)/pmoslive-luton26.bin
 LIVEBOOT_JAGUAR1_BIN := $(LIVEBOOT_ARTIFACT_DIR)/pmoslive-jaguar1.bin
 UART_STAGE1_DIR := $(BUILD_DIR)/uart-stage1
 UART_STAGE1_ENTRY_OBJ := $(UART_STAGE1_DIR)/entry.o
@@ -175,6 +176,7 @@ endif
 UART_STAGE1_RECOVERY_CPPFLAGS = \
 	-DRECOVERY_LUTON26_FILE=\"$(abspath $(RECOVERY_LUTON26_BIN))\" \
 	-DRECOVERY_JAGUAR1_FILE=\"$(abspath $(RECOVERY_JAGUAR1_BIN))\" \
+	-DLIVEBOOT_LUTON26_FILE=\"$(abspath $(LIVEBOOT_LUTON26_BIN))\" \
 	-DLIVEBOOT_JAGUAR1_FILE=\"$(abspath $(LIVEBOOT_JAGUAR1_BIN))\"
 
 UART_STAGE1_CPPFLAGS = $(if $(UART_STAGE1_ENABLED),\
@@ -279,8 +281,8 @@ $(UART_STAGE1_C_OBJ): src/uart_ramloader.c include/postmerkos_uart_crypto.h | $(
 	@$(OBJDUMP) -drwC $@ > $@.dis
 	@$(READELF) -rW $@ > $@.relocs
 
-$(UART_STAGE1_RECOVERY_OBJ): src/uart_stage1_recovery_blobs.S $(RECOVERY_LUTON26_BIN) $(RECOVERY_JAGUAR1_BIN) $(LIVEBOOT_JAGUAR1_BIN) | $(UART_STAGE1_DIR)
-	@echo "  AS      $@ (embedded Luton26/Jaguar1 recovery + Jaguar1 PMOSLIVE)"
+$(UART_STAGE1_RECOVERY_OBJ): src/uart_stage1_recovery_blobs.S $(RECOVERY_LUTON26_BIN) $(RECOVERY_JAGUAR1_BIN) $(LIVEBOOT_LUTON26_BIN) $(LIVEBOOT_JAGUAR1_BIN) | $(UART_STAGE1_DIR)
+	@echo "  AS      $@ (embedded Luton26/Jaguar1 recovery + Luton26/Jaguar1 PMOSLIVE)"
 	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(STAGE1_ASFLAGS) $(UART_STAGE1_RECOVERY_CPPFLAGS) -c $< -o $@
 	@$(OBJDUMP) -drwC $@ > $@.dis
 	@$(READELF) -rW $@ > $@.relocs
@@ -419,7 +421,7 @@ $(ARTIFACT).manifest.json: $(ARTIFACT) $(LOADER_BIN)
 	  --uart-menu-timeout-ms '$(UART_MENU_TIMEOUT_MS)' \
 	  --uart-stage1-addr '$(UART_RAMLOADER_STAGE1_ADDR)' \
 	  --uart-stage1-flash-offset '$(UART_RAMLOADER_STAGE1_FLASH_OFFSET)' \
-	  $(if $(UART_STAGE1_ENABLED),--uart-stage1-elf '$(UART_STAGE1_ELF)' --uart-stage1-bin '$(UART_STAGE1_BIN)' --recovery-luton26-bin '$(RECOVERY_LUTON26_BIN)' --recovery-jaguar1-bin '$(RECOVERY_JAGUAR1_BIN)' --liveboot-jaguar1-bin '$(LIVEBOOT_JAGUAR1_BIN)',) \
+	  $(if $(UART_STAGE1_ENABLED),--uart-stage1-elf '$(UART_STAGE1_ELF)' --uart-stage1-bin '$(UART_STAGE1_BIN)' --recovery-luton26-bin '$(RECOVERY_LUTON26_BIN)' --recovery-jaguar1-bin '$(RECOVERY_JAGUAR1_BIN)' --liveboot-luton26-bin '$(LIVEBOOT_LUTON26_BIN)' --liveboot-jaguar1-bin '$(LIVEBOOT_JAGUAR1_BIN)',) \
 	  --compiler '$(CC)' --linker '$(LD)' \
 	  --toolchain-id "$$(./scripts/toolchain-env.sh --print-id)" \
 	  --loader $(LOADER_BIN) --image $(ARTIFACT) --output $@
@@ -480,7 +482,7 @@ $(LIVEBOOT_STAMP): payloads/uart-liveboot/liveboot.c \
 	@mkdir -p '$(dir $(LIVEBOOT_STAMP))'
 	@touch '$(LIVEBOOT_STAMP)'
 
-$(LIVEBOOT_JAGUAR1_BIN): $(LIVEBOOT_STAMP)
+$(LIVEBOOT_LUTON26_BIN) $(LIVEBOOT_JAGUAR1_BIN): $(LIVEBOOT_STAMP)
 	@test -s '$@'
 
 liveboot-payloads: $(LIVEBOOT_STAMP)

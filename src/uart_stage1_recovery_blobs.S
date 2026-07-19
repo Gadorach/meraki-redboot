@@ -5,6 +5,9 @@
 #ifndef RECOVERY_JAGUAR1_FILE
 #error RECOVERY_JAGUAR1_FILE must name the Jaguar1 recovery binary
 #endif
+#ifndef LIVEBOOT_LUTON26_FILE
+#error LIVEBOOT_LUTON26_FILE must name the Luton26 PMOSLIVE binary
+#endif
 #ifndef LIVEBOOT_JAGUAR1_FILE
 #error LIVEBOOT_JAGUAR1_FILE must name the Jaguar1 PMOSLIVE binary
 #endif
@@ -23,6 +26,13 @@ recovery_luton26_blob_end:
 recovery_jaguar1_blob_start:
     .incbin RECOVERY_JAGUAR1_FILE
 recovery_jaguar1_blob_end:
+    .balign 4
+
+    .global liveboot_luton26_blob_start
+    .global liveboot_luton26_blob_end
+liveboot_luton26_blob_start:
+    .incbin LIVEBOOT_LUTON26_FILE
+liveboot_luton26_blob_end:
     .balign 4
 
     .global liveboot_jaguar1_blob_start

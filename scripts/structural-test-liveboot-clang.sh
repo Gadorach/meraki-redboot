@@ -16,27 +16,29 @@ common=(--target=mipsel-linux-gnu -EL -march=mips32r2 -mabi=32 -msoft-float -G 0
   -Wno-unused-function -Wno-unused-variable -Wno-unused-parameter -Wno-sign-compare)
 
 clang "${common[@]}" -c "$root/payloads/uart-liveboot/entry.S" -o "$tmp/live/entry.o"
-clang "${common[@]}" -DRECOVERY_SOC_FAMILY=2 -c \
-  "$root/payloads/uart-liveboot/liveboot.c" -o "$tmp/live/liveboot.o"
-ld.lld -m elf32ltsmip -static -nostdlib --gc-sections \
-  -T "$root/payloads/uart-liveboot/linker.ld" \
-  "$tmp/live/entry.o" "$tmp/live/liveboot.o" -o "$tmp/live/pmoslive-jaguar1.elf"
-readelf -h "$tmp/live/pmoslive-jaguar1.elf" | \
-  grep -Eq 'Entry point address:[[:space:]]+0x86c00000$'
-test -z "$(nm -u "$tmp/live/pmoslive-jaguar1.elf")"
-if nm "$tmp/live/pmoslive-jaguar1.elf" | grep -Eiq 'spi|erase|program|flash'; then
-  echo 'PMOSLIVE retained a flash-related linked symbol' >&2
-  exit 1
-fi
-llvm-objcopy -O binary "$tmp/live/pmoslive-jaguar1.elf" \
-  "$tmp/live/pmoslive-jaguar1.bin"
-python3 "$root/payloads/uart-liveboot/write_descriptor.py" \
-  --binary "$tmp/live/pmoslive-jaguar1.bin" \
-  --output "$tmp/live/pmoslive-jaguar1.descriptor.json"
-! grep -aEq 'ERASEFLASH|FLASH-PREFLIGHT|PROGRESS ERASE|PROGRESS PROGRAM' \
-  "$tmp/live/pmoslive-jaguar1.bin"
-
-grep -aFq 'PMOSLIVE3;SOC=jaguar1' "$tmp/live/pmoslive-jaguar1.bin"
+for family_spec in 'luton26:1' 'jaguar1:2'; do
+  family=${family_spec%%:*}
+  family_id=${family_spec##*:}
+  clang "${common[@]}" -DRECOVERY_SOC_FAMILY=$family_id -c \
+    "$root/payloads/uart-liveboot/liveboot.c" -o "$tmp/live/liveboot-$family.o"
+  ld.lld -m elf32ltsmip -static -nostdlib --gc-sections \
+    -T "$root/payloads/uart-liveboot/linker.ld" \
+    "$tmp/live/entry.o" "$tmp/live/liveboot-$family.o" -o "$tmp/live/pmoslive-$family.elf"
+  readelf -h "$tmp/live/pmoslive-$family.elf" | \
+    grep -Eq 'Entry point address:[[:space:]]+0x86c00000$'
+  test -z "$(nm -u "$tmp/live/pmoslive-$family.elf")"
+  if nm "$tmp/live/pmoslive-$family.elf" | grep -Eiq 'spi|erase|program|flash'; then
+    echo "PMOSLIVE $family retained a flash-related linked symbol" >&2
+    exit 1
+  fi
+  llvm-objcopy -O binary "$tmp/live/pmoslive-$family.elf" "$tmp/live/pmoslive-$family.bin"
+  python3 "$root/payloads/uart-liveboot/write_descriptor.py" \
+    --family "$family" --binary "$tmp/live/pmoslive-$family.bin" \
+    --output "$tmp/live/pmoslive-$family.descriptor.json"
+  ! grep -aEq 'ERASEFLASH|FLASH-PREFLIGHT|PROGRESS ERASE|PROGRESS PROGRAM' \
+    "$tmp/live/pmoslive-$family.bin"
+  grep -aFq "PMOSLIVE3;SOC=$family" "$tmp/live/pmoslive-$family.bin"
+done
 
 clang "${common[@]}" -c "$root/payloads/uart-firmware-recovery/entry.S" \
   -o "$tmp/recovery/entry.o"
@@ -72,6 +74,7 @@ clang "${common[@]}" "${policy[@]}" -c "$root/src/uart_ramloader.c" \
 clang "${common[@]}" -x assembler-with-cpp -D__ASSEMBLY__ \
   -DRECOVERY_LUTON26_FILE=\"$tmp/recovery/recovery-1.bin\" \
   -DRECOVERY_JAGUAR1_FILE=\"$tmp/recovery/recovery-2.bin\" \
+  -DLIVEBOOT_LUTON26_FILE=\"$tmp/live/pmoslive-luton26.bin\" \
   -DLIVEBOOT_JAGUAR1_FILE=\"$tmp/live/pmoslive-jaguar1.bin\" \
   -c "$root/src/uart_stage1_recovery_blobs.S" -o "$tmp/stage1/recovery_blobs.o"
 ld.lld -m elf32ltsmip -static -nostdlib -T "$root/src/uart_stage1.lds" \
@@ -86,12 +89,14 @@ llvm-objcopy -O binary "$tmp/stage1/uart-stage1.elf" "$tmp/stage1/uart-stage1.bi
 test "$(stat -c %s "$tmp/stage1/uart-stage1.bin")" -le $((0x00100000))
 for marker in \
   'PMOSBOOT MENU 1=UART-RAMLOADER 2=FW-RECOVERY 3=LIVEBOOT' \
-  'PMOSLIVE READY 3' \
+  'PMOSLIVE3;SOC=luton26' \
+  'PMOSLIVE3;SOC=jaguar1' \
   'PMOSRECOVERY3;SOC=luton26' \
   'PMOSRECOVERY3;SOC=jaguar1'; do
   grep -aFq "$marker" "$tmp/stage1/uart-stage1.bin"
 done
 
-printf 'Clang PMOSLIVE/stage1 structural build passed: live=%s bytes, stage1=%s bytes.\n' \
+printf 'Clang PMOSLIVE/stage1 structural build passed: luton26=%s bytes, jaguar1=%s bytes, stage1=%s bytes.\n' \
+  "$(stat -c %s "$tmp/live/pmoslive-luton26.bin")" \
   "$(stat -c %s "$tmp/live/pmoslive-jaguar1.bin")" \
   "$(stat -c %s "$tmp/stage1/uart-stage1.bin")"

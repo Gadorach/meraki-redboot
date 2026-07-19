@@ -1,5 +1,19 @@
 # Release record
 
+## 0.7.0 PMOSLIVE Luton26 expansion
+
+- Added a family-specific Luton26 PMOSLIVE payload alongside the validated
+  Jaguar1 payload, retaining the flash-disabled PMOSREC v3 transport and the
+  standard MIPS/U-Boot `argc`/`argv`/`envp` Linux handoff.
+- Embedded both PMOSLIVE payloads in the shared fixed-RAM stage and select the
+  correct binary from the loader's detected SoC family for menu option `3`.
+- Added exact-model support for MS22, MS22P, MS220-8, MS220-8P, MS220-24, and
+  MS220-24P, including the volatile platform-identity command-line hint.
+- Published separate payload descriptors and SHA-256 bindings for Luton26 and
+  Jaguar1 and expanded structural/source regression coverage for both families.
+- Ordinary flash boot and PMOSREC recovery remain unchanged; unsupported exact
+  models continue to fail closed for PMOSLIVE.
+
 ## 0.7.0 PMOSLIVE production-build correction
 
 - Added freestanding `memset` alongside `memcpy` so GCC 4.7.3 cannot introduce

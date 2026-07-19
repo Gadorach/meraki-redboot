@@ -314,8 +314,10 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("#define LIVE_BOOT_PARAMS_BYTES 0x00000c00u", source)
         self.assertIn("PMOSLIVE boot parameters must remain in physical 0x400-0xfff", source)
         self.assertIn('LIVE_ADD_ARG("mem=120M")', source)
-        self.assertIn('LIVE_ADD_ARG("postmerkos.model=MS42P")', source)
-        self.assertIn('LIVE_ADD_ARG("postmerkos.model=MS42")', source)
+        self.assertIn('static int live_make_model_arg', source)
+        self.assertIn('LIVE_ADD_ARG(model_arg)', source)
+        for model in ("MS22", "MS22P", "MS220-8", "MS220-8P", "MS220-24", "MS220-24P", "MS42", "MS42P"):
+            self.assertIn(f'text_equal(model, "{model}")', source)
         self.assertIn("kernel-command-line-postmerkos-model-v1", descriptor)
         self.assertIn("kernel-command-line-postmerkos-model-v1", manifest)
         self.assertIn("launch_live_linux(&plan, header.target_model", source)
@@ -338,21 +340,22 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("#endif /* !PMOSLIVE_TRANSPORT_ONLY */", recovery)
         self.assertIn("transport-only preprocessor", readme)
 
-        preprocessed = subprocess.run(
-            [
-                "cc", "-E", "-P", "-DRECOVERY_SOC_FAMILY=2",
-                "-I", str(ROOT / "include"),
-                str(ROOT / "payloads/uart-liveboot/liveboot.c"),
-            ],
-            check=False, capture_output=True, text=True,
-        )
-        self.assertEqual(preprocessed.returncode, 0, preprocessed.stderr)
-        self.assertIn("PMOSLIVE3;SOC=jaguar1", preprocessed.stdout)
-        for marker in (
-            "ERASEFLASH", "FLASH-PREFLIGHT", "PROGRESS ERASE",
-            "PROGRESS PROGRAM", "PMOSPFT",
-        ):
-            self.assertNotIn(marker, preprocessed.stdout)
+        for family_id, family_name in ((1, "luton26"), (2, "jaguar1")):
+            preprocessed = subprocess.run(
+                [
+                    "cc", "-E", "-P", f"-DRECOVERY_SOC_FAMILY={family_id}",
+                    "-I", str(ROOT / "include"),
+                    str(ROOT / "payloads/uart-liveboot/liveboot.c"),
+                ],
+                check=False, capture_output=True, text=True,
+            )
+            self.assertEqual(preprocessed.returncode, 0, preprocessed.stderr)
+            self.assertIn(f"PMOSLIVE3;SOC={family_name}", preprocessed.stdout)
+            for marker in (
+                "ERASEFLASH", "FLASH-PREFLIGHT", "PROGRESS ERASE",
+                "PROGRESS PROGRAM", "PMOSPFT",
+            ):
+                self.assertNotIn(marker, preprocessed.stdout)
 
     def test_clean_removes_liveboot_and_other_generated_work(self) -> None:
         with tempfile.TemporaryDirectory() as td:

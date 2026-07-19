@@ -65,10 +65,23 @@ void *memset(void *destination, int value, unsigned long bytes)
 #endif
 #define LIVE_CACHE_LINE 32u
 #define SQUASHFS_MAJOR 4u
+#if RECOVERY_SOC_FAMILY == 1
+#define LIVE_SOC_NAME "luton26"
+#define LIVE_SOC_FAMILY_ID 1u
+#define LIVE_DESCRIPTOR \
+    "PMOSLIVE3;SOC=luton26;FAMILY=1;PROTO=3;FLASH=0;LIVEBOOT=1;" \
+    "IMAGE_BYTES=16777216;KERNEL=81000000;ROOTFS=87000000;MEM_MIB=120;" \
+    "FRAME_MAX=4096;WINDOW_MAX=16;SPARSE=1;LZ4=1;END"
+#elif RECOVERY_SOC_FAMILY == 2
+#define LIVE_SOC_NAME "jaguar1"
+#define LIVE_SOC_FAMILY_ID 2u
 #define LIVE_DESCRIPTOR \
     "PMOSLIVE3;SOC=jaguar1;FAMILY=2;PROTO=3;FLASH=0;LIVEBOOT=1;" \
     "IMAGE_BYTES=16777216;KERNEL=81000000;ROOTFS=87000000;MEM_MIB=120;" \
     "FRAME_MAX=4096;WINDOW_MAX=16;SPARSE=1;LZ4=1;END"
+#else
+#error PMOSLIVE requires RECOVERY_SOC_FAMILY 1 (Luton26) or 2 (Jaguar1)
+#endif
 
 struct live_spim_header {
     u32 magic;
@@ -151,7 +164,13 @@ static void live_disable_interrupts(void)
 
 static int live_model_allowed(const char *model)
 {
+#if RECOVERY_SOC_FAMILY == 1
+    return text_equal(model, "MS22") || text_equal(model, "MS22P") ||
+           text_equal(model, "MS220-8") || text_equal(model, "MS220-8P") ||
+           text_equal(model, "MS220-24") || text_equal(model, "MS220-24P");
+#else
     return text_equal(model, "MS42") || text_equal(model, "MS42P");
+#endif
 }
 
 static int validate_live_header(const struct package_v3_header *header, const u8 *raw)
@@ -160,7 +179,7 @@ static int validate_live_header(const struct package_v3_header *header, const u8
         header->version != PACKAGE_PROTOCOL_VERSION ||
         (header->flags & ~LIVE_KNOWN_FLAGS) != 0u ||
         (header->flags & FLAG_LIVE_BOOT) == 0u ||
-        header->soc_family != 2u || header->image_size != FULL_IMAGE_SIZE ||
+        header->soc_family != LIVE_SOC_FAMILY_ID || header->image_size != FULL_IMAGE_SIZE ||
         header->manifest_size == 0u || header->manifest_size > MAX_MANIFEST ||
         (header->frame_size != 1024u && header->frame_size != 4096u) ||
         header->window_size == 0u || header->window_size > MAX_WINDOW ||
@@ -401,6 +420,23 @@ static int live_add_env(u32 *envp, u32 *index, char **string_cursor,
     return 0;
 }
 
+static int live_make_model_arg(char *buffer, u32 bytes, const char *model)
+{
+    static const char prefix[] = "postmerkos.model=";
+    u32 used = 0u, i = 0u;
+    while (prefix[i]) {
+        if (used + 1u >= bytes) return -1;
+        buffer[used++] = prefix[i++];
+    }
+    i = 0u;
+    while (model[i]) {
+        if (used + 1u >= bytes) return -1;
+        buffer[used++] = model[i++];
+    }
+    buffer[used] = 0;
+    return 0;
+}
+
 static int prepare_linux_boot_params(const struct live_boot_plan *plan,
                                      const char *target_model,
                                      u32 *argc_out, u32 *argv_address,
@@ -414,6 +450,7 @@ static int prepare_linux_boot_params(const struct live_boot_plan *plan,
     char *env_limit = (char *)(LIVE_BOOT_PARAMS_BASE + LIVE_BOOT_PARAMS_BYTES);
     char rd_start[24] = "rd_start=";
     char rd_size[24] = "rd_size=";
+    char model_arg[48];
     char *cursor;
     u32 argc = 1u, envc = 0u;
 
@@ -441,12 +478,10 @@ static int prepare_linux_boot_params(const struct live_boot_plan *plan,
     LIVE_ADD_ARG("prompt_ramdisk=0");
     LIVE_ADD_ARG("ramdisk_size=8192");
     LIVE_ADD_ARG("postmerkos.live=1");
-    if (text_equal(target_model, "MS42P"))
-        LIVE_ADD_ARG("postmerkos.model=MS42P");
-    else if (text_equal(target_model, "MS42"))
-        LIVE_ADD_ARG("postmerkos.model=MS42");
-    else
+    if (!live_model_allowed(target_model) ||
+        live_make_model_arg(model_arg, sizeof(model_arg), target_model) != 0)
         goto overflow;
+    LIVE_ADD_ARG(model_arg);
     LIVE_ADD_ARG("panic=5");
     argv[argc] = 0u;
 
@@ -593,7 +628,8 @@ void liveboot_main(void)
     uart_clock = baseline_divisor * 16u * UART_BASELINE_BAUD;
     current_rate = uart_actual_rate(uart_clock, current_divisor);
 
-    puts_b("PMOSLIVE READY 3 SOC=jaguar1 FAMILY=00000002 FLASH=0\n");
+    puts_b("PMOSLIVE READY 3 SOC="); puts_b(LIVE_SOC_NAME);
+    puts_b(" FAMILY="); hex32(LIVE_SOC_FAMILY_ID); puts_b(" FLASH=0\n");
     puts_b("PMOSLIVE DESCRIPTOR "); puts_b(live_descriptor); puts_b("\n");
     puts_b("PMOSLIVE RAM-MAP STAGING=81400000-82400000 MANIFEST=82400000 ");
     puts_b("EXEC=86c00000-87000000 ROOTFS=87000000-87800000\n");

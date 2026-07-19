@@ -45,6 +45,7 @@ def main() -> int:
     ap.add_argument("--uart-stage1-bin", type=Path)
     ap.add_argument("--recovery-luton26-bin", type=Path)
     ap.add_argument("--recovery-jaguar1-bin", type=Path)
+    ap.add_argument("--liveboot-luton26-bin", type=Path)
     ap.add_argument("--liveboot-jaguar1-bin", type=Path)
     ap.add_argument("--compiler", required=True)
     ap.add_argument("--linker", required=True)
@@ -63,8 +64,8 @@ def main() -> int:
         raise SystemExit("UART RAM-loader requires stage1 ELF and binary metadata")
     if uart_enabled and (args.recovery_luton26_bin is None or args.recovery_jaguar1_bin is None):
         raise SystemExit("UART stage requires both embedded platform recovery binaries")
-    if uart_enabled and args.liveboot_jaguar1_bin is None:
-        raise SystemExit("UART stage requires the embedded Jaguar1 PMOSLIVE binary")
+    if uart_enabled and (args.liveboot_luton26_bin is None or args.liveboot_jaguar1_bin is None):
+        raise SystemExit("UART stage requires both embedded platform PMOSLIVE binaries")
     if args.uart_ram_start >= args.uart_ram_end:
         raise SystemExit("UART RAM range is invalid")
     compiler_version = subprocess.run(
@@ -160,6 +161,27 @@ def main() -> int:
                 },
             } if uart_enabled else None),
             "embedded_liveboot": ({
+                "luton26": {
+                    "path": str(args.liveboot_luton26_bin),
+                    "size": args.liveboot_luton26_bin.stat().st_size,
+                    "sha256": sha(args.liveboot_luton26_bin),
+                    "load_address": 0x86C00000,
+                    "entry_address": 0x86C00000,
+                    "entry_contract": "flat-binary-byte-zero-v1",
+                    "accepted_models": ["MS22", "MS22P", "MS220-8", "MS220-8P", "MS220-24", "MS220-24P"],
+                    "flash_access": "none",
+                    "transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
+                    "linux_handoff": "mips-legacy-argc-argv-envp-external-initrd-v1",
+                    "platform_identity_handoff": "kernel-command-line-postmerkos-model-v1",
+                    "rootfs_handoff": "squashfs-as-legacy-initrd-v1",
+                    "kernel_load_address": 0x81000000,
+                    "squashfs_address": 0x87000000,
+                    "linux_memory_mib": 120,
+                    "boot_params_physical_address": 0x00000400,
+                    "boot_params_uncached_address": 0xA0000400,
+                    "boot_params_bytes": 0x00000C00,
+                    "top_reserved_mib": 8,
+                },
                 "jaguar1": {
                     "path": str(args.liveboot_jaguar1_bin),
                     "size": args.liveboot_jaguar1_bin.stat().st_size,

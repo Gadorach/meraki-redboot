@@ -17,8 +17,11 @@ COMMON_CFLAGS := -EL -mabi=32 -march=mips32r2 -msoft-float -G 0 -mno-abicalls \
 LDFLAGS := -EL -m elf32ltsmip -G 0 -static -n -nostdlib --gc-sections -T linker.ld
 
 .PHONY: all clean test
-all: $(ARTIFACT_DIR)/pmoslive-jaguar1.bin \
+all: $(ARTIFACT_DIR)/pmoslive-luton26.bin \
+     $(ARTIFACT_DIR)/pmoslive-jaguar1.bin \
+     $(ARTIFACT_DIR)/pmoslive-luton26.bin.sha256 \
      $(ARTIFACT_DIR)/pmoslive-jaguar1.bin.sha256 \
+     $(ARTIFACT_DIR)/pmoslive-luton26.descriptor.json \
      $(ARTIFACT_DIR)/pmoslive-jaguar1.descriptor.json
 
 $(BUILD_DIR) $(ARTIFACT_DIR):
@@ -27,26 +30,34 @@ $(BUILD_DIR) $(ARTIFACT_DIR):
 $(BUILD_DIR)/entry.o: entry.S | $(BUILD_DIR)
 	$(CC) $(COMMON_CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/liveboot.o: liveboot.c ../uart-firmware-recovery/recovery.c $(ROOT)/include/postmerkos_uart_crypto.h | $(BUILD_DIR)
+$(BUILD_DIR)/liveboot-luton26.o: liveboot.c ../uart-firmware-recovery/recovery.c $(ROOT)/include/postmerkos_uart_crypto.h | $(BUILD_DIR)
+	$(CC) $(COMMON_CFLAGS) -DRECOVERY_SOC_FAMILY=1 -c $< -o $@
+
+$(BUILD_DIR)/liveboot-jaguar1.o: liveboot.c ../uart-firmware-recovery/recovery.c $(ROOT)/include/postmerkos_uart_crypto.h | $(BUILD_DIR)
 	$(CC) $(COMMON_CFLAGS) -DRECOVERY_SOC_FAMILY=2 -c $< -o $@
 
-$(BUILD_DIR)/pmoslive-jaguar1.elf: $(BUILD_DIR)/entry.o $(BUILD_DIR)/liveboot.o linker.ld
-	$(LD) $(LDFLAGS) $(BUILD_DIR)/entry.o $(BUILD_DIR)/liveboot.o -o $@
+$(BUILD_DIR)/pmoslive-luton26.elf: $(BUILD_DIR)/entry.o $(BUILD_DIR)/liveboot-luton26.o linker.ld
+	$(LD) $(LDFLAGS) $(BUILD_DIR)/entry.o $(BUILD_DIR)/liveboot-luton26.o -o $@
 	@$(READELF) -h $@ | grep -Eq "Entry point address:[[:space:]]+0x86c00000$$"
 	@test -z "$$($(NM) -u $@)"
 
-$(ARTIFACT_DIR)/pmoslive-jaguar1.bin: $(BUILD_DIR)/pmoslive-jaguar1.elf | $(ARTIFACT_DIR)
+$(BUILD_DIR)/pmoslive-jaguar1.elf: $(BUILD_DIR)/entry.o $(BUILD_DIR)/liveboot-jaguar1.o linker.ld
+	$(LD) $(LDFLAGS) $(BUILD_DIR)/entry.o $(BUILD_DIR)/liveboot-jaguar1.o -o $@
+	@$(READELF) -h $@ | grep -Eq "Entry point address:[[:space:]]+0x86c00000$$"
+	@test -z "$$($(NM) -u $@)"
+
+$(ARTIFACT_DIR)/pmoslive-%.bin: $(BUILD_DIR)/pmoslive-%.elf | $(ARTIFACT_DIR)
 	$(OBJCOPY) -O binary $< $@
 	@test $$(stat -c %s $@) -gt 0
 	@test $$(stat -c %s $@) -le 4194304
-	@$(PYTHON) write_descriptor.py --binary $@ \
-		--output $(BUILD_DIR)/pmoslive-jaguar1.validation.json
+	@$(PYTHON) write_descriptor.py --family $* --binary $@ \
+		--output $(BUILD_DIR)/pmoslive-$*.validation.json
 
 $(ARTIFACT_DIR)/%.bin.sha256: $(ARTIFACT_DIR)/%.bin
 	@cd $(ARTIFACT_DIR) && $(SHA256SUM) $*.bin > $*.bin.sha256
 
-$(ARTIFACT_DIR)/pmoslive-jaguar1.descriptor.json: $(ARTIFACT_DIR)/pmoslive-jaguar1.bin
-	@$(PYTHON) write_descriptor.py --binary $< --output $@
+$(ARTIFACT_DIR)/pmoslive-%.descriptor.json: $(ARTIFACT_DIR)/pmoslive-%.bin
+	@$(PYTHON) write_descriptor.py --family $* --binary $< --output $@
 
 clean:
 	rm -rf $(BUILD_DIR) $(ARTIFACT_DIR)
