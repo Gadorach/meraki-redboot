@@ -349,6 +349,34 @@ class SourceContractTests(unittest.TestCase):
         ):
             self.assertNotIn(marker, preprocessed.stdout)
 
+    def test_clean_removes_liveboot_and_other_generated_work(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td) / ".work"
+            generated = (
+                "build", "out", "artifacts", "recovery", "liveboot",
+                "logs", "support",
+            )
+            for name in generated:
+                path = work / name
+                path.mkdir(parents=True, exist_ok=True)
+                (path / "stale-marker").write_text(name)
+
+            toolchain_marker = work / "toolchains" / "keep-me"
+            toolchain_marker.parent.mkdir(parents=True, exist_ok=True)
+            toolchain_marker.write_text("cached toolchain")
+
+            cleaned = subprocess.run(
+                [
+                    "make", "--no-print-directory", "-C", str(ROOT),
+                    f"WORK_ROOT={work}", "clean",
+                ],
+                check=False, capture_output=True, text=True,
+            )
+            self.assertEqual(cleaned.returncode, 0, cleaned.stderr)
+            for name in generated:
+                self.assertFalse((work / name).exists(), name)
+            self.assertTrue(toolchain_marker.is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

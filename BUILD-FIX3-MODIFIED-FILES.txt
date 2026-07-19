@@ -1,0 +1,4 @@
+Makefile
+tests/test_source_contract.py
+PMOSLIVE-BUILD-FIX3-2026-07-19.md
+PACKAGE-IDENTITY.txt

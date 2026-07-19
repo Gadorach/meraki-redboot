@@ -543,7 +543,7 @@ test:
 	@./scripts/structural-test-liveboot-clang.sh
 
 clean:
-	@rm -rf '$(WORK_ROOT)/build' '$(WORK_ROOT)/out' '$(WORK_ROOT)/artifacts' '$(WORK_ROOT)/recovery' '$(WORK_ROOT)/logs' '$(WORK_ROOT)/support'
+	@rm -rf '$(WORK_ROOT)/build' '$(WORK_ROOT)/out' '$(WORK_ROOT)/artifacts' '$(WORK_ROOT)/recovery' '$(WORK_ROOT)/liveboot' '$(WORK_ROOT)/logs' '$(WORK_ROOT)/support'
 
 distclean:
 	@rm -rf '$(WORK_ROOT)'

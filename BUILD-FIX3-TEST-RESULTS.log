@@ -1,0 +1,87 @@
+PMOSLIVE buildfix3 final validation
+Date: 2026-07-19
+
+test_accepts_stackless_leaf (test_codegen_validator.PreDdrCodegenValidatorTests.test_accepts_stackless_leaf) ... ok
+test_rejects_absolute_jump (test_codegen_validator.PreDdrCodegenValidatorTests.test_rejects_absolute_jump) ... ok
+test_rejects_nested_call (test_codegen_validator.PreDdrCodegenValidatorTests.test_rejects_nested_call) ... ok
+test_rejects_stack_reference (test_codegen_validator.PreDdrCodegenValidatorTests.test_rejects_stack_reference) ... ok
+test_recovery_source_tracks_object_and_array_depth (test_manifest_digest_shadowing.ManifestDigestShadowingTests.test_recovery_source_tracks_object_and_array_depth) ... ok
+test_sorted_artifact_contains_nested_digest_before_full_image_digest (test_manifest_digest_shadowing.ManifestDigestShadowingTests.test_sorted_artifact_contains_nested_digest_before_full_image_digest) ... ok
+test_clean_removes_liveboot_and_other_generated_work (test_source_contract.SourceContractTests.test_clean_removes_liveboot_and_other_generated_work) ... ok
+test_crc_off_is_copy_only_and_table_is_conditional (test_source_contract.SourceContractTests.test_crc_off_is_copy_only_and_table_is_conditional) ... ok
+test_current_docs_describe_source_built_gcc473 (test_source_contract.SourceContractTests.test_current_docs_describe_source_built_gcc473) ... ok
+test_default_profile_is_development (test_source_contract.SourceContractTests.test_default_profile_is_development) ... ok
+test_development_profile_enables_uart_recovery (test_source_contract.SourceContractTests.test_development_profile_enables_uart_recovery) ... ok
+test_generated_outputs_and_toolchain_are_source_local (test_source_contract.SourceContractTests.test_generated_outputs_and_toolchain_are_source_local) ... ok
+test_make_all_dispatches_to_optional_distrobox (test_source_contract.SourceContractTests.test_make_all_dispatches_to_optional_distrobox) ... ok
+test_mandatory_hard_boundary_is_separate_from_legacy_policy (test_source_contract.SourceContractTests.test_mandatory_hard_boundary_is_separate_from_legacy_policy) ... ok
+test_payload_packer_generates_loader_compatible_crc (test_source_contract.SourceContractTests.test_payload_packer_generates_loader_compatible_crc) ... ok
+test_pmoslive_uses_safe_low_page_boot_params_and_120m_initrd_map (test_source_contract.SourceContractTests.test_pmoslive_uses_safe_low_page_boot_params_and_120m_initrd_map) ... ok
+test_policy_driven_source_paths_exist (test_source_contract.SourceContractTests.test_policy_driven_source_paths_exist) ... ok
+test_pre_ddr_cp0_helpers_are_mandatory_inline (test_source_contract.SourceContractTests.test_pre_ddr_cp0_helpers_are_mandatory_inline) ... ok
+test_pre_ddr_initializer_is_one_stackless_leaf_contract (test_source_contract.SourceContractTests.test_pre_ddr_initializer_is_one_stackless_leaf_contract) ... ok
+test_release_build_uses_pinned_gcc_473_legacy_pic (test_source_contract.SourceContractTests.test_release_build_uses_pinned_gcc_473_legacy_pic) ... ok
+test_toolchain_bootstrap_disables_recursive_info_generation (test_source_contract.SourceContractTests.test_toolchain_bootstrap_disables_recursive_info_generation) ... ok
+test_uart_engine_is_fixed_ram_stage_not_flash_c_code (test_source_contract.SourceContractTests.test_uart_engine_is_fixed_ram_stage_not_flash_c_code) ... ok
+test_uart_stage1_reserves_uncached_alias_above_upload_window (test_source_contract.SourceContractTests.test_uart_stage1_reserves_uncached_alias_above_upload_window) ... ok
+test_uart_stage_validator_failure_survives_tee (test_source_contract.SourceContractTests.test_uart_stage_validator_failure_survives_tee) ... ok
+test_vtss_include_closure_is_present (test_source_contract.SourceContractTests.test_vtss_include_closure_is_present) ... ok
+test_warning_uart_is_source_owned (test_source_contract.SourceContractTests.test_warning_uart_is_source_owned) ... ok
+test_wrapper_embeds_only_current_build (test_source_contract.SourceContractTests.test_wrapper_embeds_only_current_build) ... ok
+test_baud_error_ppm_avoids_saturation_overflow (test_uart_recovery_contract.UartRecoveryContractTests.test_baud_error_ppm_avoids_saturation_overflow) ... ok
+test_binary_uart_paths_are_byte_transparent (test_uart_recovery_contract.UartRecoveryContractTests.test_binary_uart_paths_are_byte_transparent) ... ok
+test_detected_soc_is_passed_into_ramloader (test_uart_recovery_contract.UartRecoveryContractTests.test_detected_soc_is_passed_into_ramloader) ... ok
+test_feature_transport_uses_safe_single_frame_recovery_and_stream_drain (test_uart_recovery_contract.UartRecoveryContractTests.test_feature_transport_uses_safe_single_frame_recovery_and_stream_drain) ... ok
+test_fixed_ram_stage_owns_flash_kernel_boot (test_uart_recovery_contract.UartRecoveryContractTests.test_fixed_ram_stage_owns_flash_kernel_boot) ... ok
+test_flash_failure_launches_embedded_platform_recovery (test_uart_recovery_contract.UartRecoveryContractTests.test_flash_failure_launches_embedded_platform_recovery) ... ok
+test_flash_loader_only_copies_and_calls_fixed_ram_stage (test_uart_recovery_contract.UartRecoveryContractTests.test_flash_loader_only_copies_and_calls_fixed_ram_stage) ... ok
+test_flash_size_alignment_uses_historical_rounded_copy_policy (test_uart_recovery_contract.UartRecoveryContractTests.test_flash_size_alignment_uses_historical_rounded_copy_policy) ... ok
+test_image_checks_emit_structured_pass_warn_fail_diagnostics (test_uart_recovery_contract.UartRecoveryContractTests.test_image_checks_emit_structured_pass_warn_fail_diagnostics) ... ok
+test_loader_performs_cache_coherency_before_jump (test_uart_recovery_contract.UartRecoveryContractTests.test_loader_performs_cache_coherency_before_jump) ... ok
+test_loader_receive_paths_are_bounded_and_abort_to_boot (test_uart_recovery_contract.UartRecoveryContractTests.test_loader_receive_paths_are_bounded_and_abort_to_boot) ... ok
+test_loader_rejects_flags_and_bounds_entire_object (test_uart_recovery_contract.UartRecoveryContractTests.test_loader_rejects_flags_and_bounds_entire_object) ... ok
+test_recovery_enforces_manifest_flash_and_terminal_contracts (test_uart_recovery_contract.UartRecoveryContractTests.test_recovery_enforces_manifest_flash_and_terminal_contracts) ... ok
+test_recovery_flat_binary_has_explicit_byte_zero_entry (test_uart_recovery_contract.UartRecoveryContractTests.test_recovery_flat_binary_has_explicit_byte_zero_entry) ... ok
+test_recovery_json_lookup_is_scoped_to_direct_object_members (test_uart_recovery_contract.UartRecoveryContractTests.test_recovery_json_lookup_is_scoped_to_direct_object_members) ... ok
+test_recovery_object_deadline_is_enforced (test_uart_recovery_contract.UartRecoveryContractTests.test_recovery_object_deadline_is_enforced) ... ok
+test_recovery_preflight_preserves_bootloader_and_restores_scratch (test_uart_recovery_contract.UartRecoveryContractTests.test_recovery_preflight_preserves_bootloader_and_restores_scratch) ... ok
+test_sender_enters_stage2_menu_option_one (test_uart_recovery_contract.UartRecoveryContractTests.test_sender_enters_stage2_menu_option_one) ... ok
+test_sender_header_integrity_and_short_writes (test_uart_recovery_contract.UartRecoveryContractTests.test_sender_header_integrity_and_short_writes) ... ok
+test_stage2_menu_requires_explicit_choice_and_times_out_to_boot (test_uart_recovery_contract.UartRecoveryContractTests.test_stage2_menu_requires_explicit_choice_and_times_out_to_boot) ... ok
+test_standalone_sender_accepts_completion_as_final_ack (test_uart_recovery_contract.UartRecoveryContractTests.test_standalone_sender_accepts_completion_as_final_ack) ... ok
+test_success_reboot_has_soft_reset_and_watchdog_fallback (test_uart_recovery_contract.UartRecoveryContractTests.test_success_reboot_has_soft_reset_and_watchdog_fallback) ... ok
+test_window_acknowledgements_are_recoverable_and_crc_protected (test_uart_recovery_contract.UartRecoveryContractTests.test_window_acknowledgements_are_recoverable_and_crc_protected) ... ok
+
+----------------------------------------------------------------------
+Ran 50 tests in 7.757s
+
+OK
+PASS: MSCC SW_MODE chip-select uses active-mask semantics
+validated strict: crc=strict size=legacy-strict loader=15944 bytes image=262144 bytes
+  active:   0x38370-0x3c1b7
+  fallback: 0x3c1b8-0x3ffff
+UART stage1: fixed uncached RAM entry 0xa7f00000; size=0x3b34; direct calls remain inside the stage
+validated development: crc=warn size=legacy-warn loader=16408 bytes image=262144 bytes
+  active:   0x17fd0-0x1bfe7
+  fallback: 0x1bfe8-0x1ffff
+  stage1:   0x20000-0x23b33
+validated permissive: crc=off size=hard-only loader=12808 bytes image=262144 bytes
+  active:   0x39bf0-0x3cdf7
+  fallback: 0x3cdf8-0x3ffff
+UART stage1: fixed uncached RAM entry 0xa7f00000; size=0x3bb4; direct calls remain inside the stage
+validated strict-uart: crc=strict size=legacy-strict loader=16200 bytes image=262144 bytes
+  active:   0x18170-0x1c0b7
+  fallback: 0x1c0b8-0x1ffff
+  stage1:   0x20000-0x23bb3
+packed /tmp/tmp.cTWYHaj8Zg/kernel.bin -> /tmp/tmp.cTWYHaj8Zg/kernel.payload.bin: payload=0x20, padding=9, crc32=0x22bcf5c8
+magic:        0x4d495053
+load address: 0x81000000
+payload size: 0x20 (32 bytes)
+entry point:  0x81000000
+stored CRC:   0x22bcf5c8
+computed CRC: 0x22bcf5c8
+reserved:     0x00000000 0x00000000 0x00000000
+payload header and CRC are valid
+Clang structural source/wrapper test passed for: strict development permissive strict-uart.
+Clang recovery payload structural builds passed with byte-zero entry for Luton26 and Jaguar1.
+Clang PMOSLIVE/stage1 structural build passed: live=27032 bytes, stage1=117512 bytes.
