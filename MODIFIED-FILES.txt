@@ -1,3 +1,4 @@
+ M CHANGELOG.md
  M Makefile
  M README.md
  M docs/BOOT-REGION-FORMAT.md
@@ -21,5 +22,11 @@
  M src/uart_stage1_recovery_blobs.S
  M tests/test_source_contract.py
  M tests/test_uart_recovery_contract.py
+?? PACKAGE-IDENTITY.txt
+?? PMOSLIVE-BUILD-FIX-2026-07-19.md
+?? PMOSLIVE-BUILD-RERUN-2026-07-19.md
+?? PMOSLIVE-FINAL-TEST-RESULTS.log
+?? PMOSLIVE-MEMORY-MAP.md
+?? PMOSLIVE-RELEASE-NOTES.md
 ?? payloads/uart-liveboot/
 ?? scripts/structural-test-liveboot-clang.sh

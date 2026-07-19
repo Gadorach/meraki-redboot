@@ -1,5 +1,14 @@
 # Release record
 
+## 0.7.0 PMOSLIVE production-build correction
+
+- Added freestanding `memset` alongside `memcpy` so GCC 4.7.3 cannot introduce
+  an unresolved libc dependency in the `-nostdlib` PMOSLIVE payload.
+- Initialised the manifest-derived rootfs length before validation, removing the
+  GCC 4.7.3 maybe-uninitialised warning without changing fail-closed validation.
+- Retained the mem=120M, low-page boot-parameter, shared-stage, and no-flash
+  contracts from the preceding PMOSLIVE source release.
+
 ## 0.7.0 post-release UART receive-window correction
 
 - Keep compact ACKs and deterministic target-to-host test streams byte-transparent.

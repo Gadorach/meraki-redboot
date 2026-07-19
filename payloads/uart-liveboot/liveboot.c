@@ -10,14 +10,23 @@
 #include "../uart-firmware-recovery/recovery.c"
 #undef recovery_main
 
-/* Clang may lower fixed-size local initialisers to memcpy even in a
- * freestanding build. Keep the payload self-contained for structural builds. */
+/* Clang and GCC may lower fixed-size initialisers or zeroing loops to
+ * memcpy/memset even in a freestanding build. Keep both routines local so the
+ * payload never acquires an implicit libc dependency. */
 void *memcpy(void *destination, const void *source, unsigned long bytes)
 {
     u8 *out = (u8 *)destination;
     const u8 *in = (const u8 *)source;
     unsigned long i;
     for (i = 0u; i < bytes; i++) out[i] = in[i];
+    return destination;
+}
+
+void *memset(void *destination, int value, unsigned long bytes)
+{
+    u8 *out = (u8 *)destination;
+    unsigned long i;
+    for (i = 0u; i < bytes; i++) out[i] = (u8)value;
     return destination;
 }
 
@@ -505,7 +514,7 @@ static int run_live_package_v3(u32 baseline_divisor)
     u8 raw[PACKAGE_HEADER_BYTES];
     struct package_v3_header header;
     struct live_boot_plan plan;
-    u32 rootfs_size, nonce;
+    u32 rootfs_size = 0u, nonce;
 
     if (!recv_exact(raw, sizeof(raw), PACKAGE_HEADER_TIMEOUT_MS)) {
         puts_b("PMOSLIVE RESULT ERROR PACKAGE-HEADER-TIMEOUT\n"); return -1;
