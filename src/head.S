@@ -83,17 +83,20 @@
 #endif
 
 #if defined(CONFIG_UART_RAMLOADER)
-#ifndef UART_STAGE1_FILE
-#error UART_STAGE1_FILE must name the fixed-RAM UART engine binary
-#endif
 #ifndef UART_STAGE1_SIZE
 #error UART_STAGE1_SIZE must be supplied by the build
 #endif
 #ifndef UART_STAGE1_LOAD_ADDR
 #error UART_STAGE1_LOAD_ADDR must be supplied by the build
 #endif
+#ifndef UART_STAGE1_FLASH_OFFSET
+#error UART_STAGE1_FLASH_OFFSET must locate the shared fixed-RAM stage in the boot region
+#endif
 #if UART_STAGE1_SIZE <= 0
 #error UART_STAGE1_SIZE must be positive
+#endif
+#if UART_STAGE1_FLASH_OFFSET < 0x1000 || UART_STAGE1_FLASH_OFFSET >= LOADER_SIZE
+#error UART_STAGE1_FLASH_OFFSET must be inside the 256 KiB boot region and outside vectors
 #endif
 #endif
 
@@ -185,9 +188,13 @@ __start:bal	10f		/* Figure out where we are */
 	 * boot work: UART upload, flash-kernel validation/copy, and final entry.
 	 * It is entered with jr and is not expected to return to relocatable
 	 * flash code. */
-	lui	t0, %hi(uart_stage1_blob_start)
-	addiu	t0, t0, %lo(uart_stage1_blob_start)
-	add	t0, t0, gp		/* Source in the active/fallback flash copy */
+	/* The wrapper stores one immutable stage-1 blob shared by both loader
+	 * copies. Recover the 256 KiB boot-region base from the current loader
+	 * address, then add the fixed shared-blob offset. */
+	li	t0, LOADER_MASK
+	and	t0, gp, t0
+	li	t4, UART_STAGE1_FLASH_OFFSET
+	add	t0, t0, t4
 	li	t1, UART_STAGE1_LOAD_ADDR	/* Uncached top-of-RAM destination */
 	li	t2, UART_STAGE1_SIZE
 1:	lbu	t3, 0(t0)
@@ -619,17 +626,5 @@ crctab:
 #endif
 
 	.align	4
-
-#if defined(CONFIG_UART_RAMLOADER)
-	.section .uart_stage1_blob, "a", @progbits
-	.align 4
-	.global uart_stage1_blob_start
-uart_stage1_blob_start:
-	.incbin UART_STAGE1_FILE
-	.global uart_stage1_blob_end
-uart_stage1_blob_end:
-	.align 4
-	.previous
-#endif
 
 .global __start

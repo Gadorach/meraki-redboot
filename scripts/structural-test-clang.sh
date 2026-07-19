@@ -21,6 +21,7 @@ stage1_addr=0xa7f00000
 stage1_max=0x00100000
 printf 'PMOSRECOVERY3;SOC=luton26;STRUCTURAL\n' > "$tmp/recovery-luton26.bin"
 printf 'PMOSRECOVERY3;SOC=jaguar1;STRUCTURAL\n' > "$tmp/recovery-jaguar1.bin"
+printf 'PMOSLIVE3;SOC=jaguar1;STRUCTURAL\n' > "$tmp/pmoslive-jaguar1.bin"
 
 if [[ -n ${PROFILE_FILTER:-} ]]; then read -r -a profiles <<<"$PROFILE_FILTER"; else profiles=(strict development permissive strict-uart); fi
 for variant in "${profiles[@]}"; do
@@ -54,6 +55,7 @@ for variant in "${profiles[@]}"; do
     clang "${common[@]}" -D__ASSEMBLY__ -x assembler-with-cpp \
       -DRECOVERY_LUTON26_FILE=\"$tmp/recovery-luton26.bin\" \
       -DRECOVERY_JAGUAR1_FILE=\"$tmp/recovery-jaguar1.bin\" \
+      -DLIVEBOOT_JAGUAR1_FILE=\"$tmp/pmoslive-jaguar1.bin\" \
       -c "$root/src/uart_stage1_recovery_blobs.S" -o "$dir/stage1-recovery.o"
     ld.lld -m elf32ltsmip -static -nostdlib -T "$root/src/uart_stage1.lds" \
       --defsym=UART_STAGE1_LOAD_ADDR=$stage1_addr --defsym=UART_STAGE1_MAX_SIZE=$stage1_max \
@@ -63,8 +65,8 @@ for variant in "${profiles[@]}"; do
       --objdump llvm-objdump --readelf "$readelf_tool" --nm "$nm_tool" \
       --load-address $stage1_addr --max-size $stage1_max
     stage1_size=$(stat -c %s "$dir/uart-stage1.bin")
-    stage1_defs=(-DUART_STAGE1_FILE=\"$dir/uart-stage1.bin\" \
-      -DUART_STAGE1_SIZE=$stage1_size -DUART_STAGE1_LOAD_ADDR=$stage1_addr)
+    stage1_defs=(-DUART_STAGE1_SIZE=$stage1_size \
+      -DUART_STAGE1_LOAD_ADDR=$stage1_addr -DUART_STAGE1_FLASH_OFFSET=0x20000)
   fi
 
   clang "${common[@]}" -D__ASSEMBLY__ -x assembler-with-cpp "${defs[@]}" "${stage1_defs[@]}" \
@@ -76,15 +78,32 @@ for variant in "${profiles[@]}"; do
   llvm-objcopy -O binary "$dir/loader.elf" "$dir/loader.bin"
   "$nm_tool" -n "$dir/loader.elf" > "$dir/loader.sym"
   len=$(stat -c %s "$dir/loader.bin")
-  fallback=$((0x40000 - len)); active=$((fallback - len))
+  stage_offset=0x40000
+  stage_size=0
+  wrapper_stage_defs=()
+  if [[ $uart == 1 ]]; then
+    stage_offset=0x20000
+    stage_size=$(stat -c %s "$dir/uart-stage1.bin")
+    wrapper_stage_defs=(-DUART_STAGE1_FILE=\"$dir/uart-stage1.bin\" \
+      -DUART_STAGE1_SIZE=$stage_size -DUART_STAGE1_OFFSET=$stage_offset)
+  fi
+  (( stage_offset + stage_size <= 0x40000 ))
+  fallback=$((stage_offset - len)); active=$((fallback - len))
+  (( active >= 0x1000 ))
   clang "${common[@]}" -D__ASSEMBLY__ -x assembler-with-cpp \
     -DACTIVE_OFFSET=$active -DFALLBACK_OFFSET=$fallback -DLOADER_LENGTH=$len \
-    -DLOADER_FILE=\"$dir/loader.bin\" -c "$root/src/boot_wrapper.S" -o "$dir/wrapper.o"
+    -DLOADER_FILE=\"$dir/loader.bin\" "${wrapper_stage_defs[@]}" \
+    -c "$root/src/boot_wrapper.S" -o "$dir/wrapper.o"
   ld.lld -m elf32ltsmip -static -nostdlib -T "$root/src/wrapper.lds" -o "$dir/boot-region.elf" "$dir/wrapper.o"
   llvm-objcopy -O binary -j .boot "$dir/boot-region.elf" "$dir/image.bin"
+  validator_stage_args=()
+  if [[ $uart == 1 ]]; then
+    validator_stage_args=(--shared-stage "$dir/uart-stage1.bin" --shared-stage-offset 0x20000)
+  fi
   python3 "$root/scripts/validate_image.py" --variant "$variant" \
     --crc-policy "$crc_policy" --size-policy "$size_policy" \
-    --loader "$dir/loader.bin" --image "$dir/image.bin" --symbols "$dir/loader.sym"
+    --loader "$dir/loader.bin" --image "$dir/image.bin" --symbols "$dir/loader.sym" \
+    "${validator_stage_args[@]}"
 done
 
 make -C "$root" --no-print-directory test-wrapper-fit

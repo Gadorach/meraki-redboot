@@ -31,6 +31,8 @@ def main() -> int:
     ap.add_argument("--uart-count-hz", type=parse_int, required=True)
     ap.add_argument("--uart-stage1-addr", type=parse_int, required=True)
     ap.add_argument("--uart-stage1-max-size", type=parse_int, required=True)
+    ap.add_argument("--uart-stage1-flash-offset", type=parse_int, required=True)
+    ap.add_argument("--uart-stage1-flash-max-size", type=parse_int, required=True)
     args = ap.parse_args()
 
     if args.fallback_region_size <= 0 or args.fallback_region_size & (args.fallback_region_size - 1):
@@ -75,6 +77,12 @@ def main() -> int:
             ap.error("UART stage1 reserved size must be in 1..0x100000")
         if args.uart_stage1_addr + args.uart_stage1_max_size > 0xA8000000:
             ap.error("UART stage1 exceeds the 128 MiB DRAM top boundary")
+        if args.uart_stage1_flash_offset != 0x00020000:
+            ap.error("shared UART stage must begin at boot-region offset 0x20000")
+        if args.uart_stage1_flash_max_size != 0x00020000:
+            ap.error("shared UART stage flash reservation must be 0x20000 bytes")
+        if args.uart_stage1_flash_offset + args.uart_stage1_flash_max_size > args.loader_region_size:
+            ap.error("shared UART stage flash reservation exceeds the loader region")
 
     print(
         "configuration: "
@@ -84,7 +92,8 @@ def main() -> int:
         f"uart={'enabled' if bool_value(args.uart_ramloader) else 'disabled'} "
         f"uart-ram=0x{args.uart_ram_start:x}-0x{args.uart_ram_end:x} "
         f"menu-ms={args.uart_menu_timeout_ms} "
-        f"stage1=0x{args.uart_stage1_addr:x}+0x{args.uart_stage1_max_size:x}"
+        f"stage1=0x{args.uart_stage1_addr:x}+0x{args.uart_stage1_max_size:x} "
+        f"stage1-flash=0x{args.uart_stage1_flash_offset:x}+0x{args.uart_stage1_flash_max_size:x}"
     )
     return 0
 

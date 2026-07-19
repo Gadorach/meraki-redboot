@@ -206,10 +206,15 @@ class SourceContractTests(unittest.TestCase):
         manifest = (ROOT / "scripts/write_manifest.py").read_text()
 
         self.assertIn("UART_RAMLOADER_STAGE1_ADDR ?= 0xa7f00000", makefile)
+        self.assertIn("UART_RAMLOADER_STAGE1_FLASH_OFFSET ?= 0x00020000", makefile)
         self.assertIn("STAGE1_CFLAGS", makefile)
         self.assertIn("UART_STAGE1_ELF", makefile)
         self.assertNotRegex(makefile, r"LOADER_OBJECTS\s*[:+]?=.*uart_ramloader\.o")
-        self.assertIn(".incbin UART_STAGE1_FILE", head)
+        self.assertNotIn(".incbin UART_STAGE1_FILE", head)
+        wrapper = (ROOT / "src/boot_wrapper.S").read_text()
+        self.assertIn(".incbin UART_STAGE1_FILE", wrapper)
+        self.assertIn("shared_uart_stage1_blob", wrapper)
+        self.assertIn("UART_STAGE1_FLASH_OFFSET", head)
         self.assertIn("UART_STAGE1_LOAD_ADDR", head)
         self.assertIn("jr\tt9", head)
         self.assertIn("PMOSRAM STAGE1 COPY", head)
@@ -228,7 +233,7 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("PMOSRECOVERY3;SOC=jaguar1;STRUCTURAL", structural)
         self.assertNotIn("PMOSRECOVERY2;SOC=", structural)
         image_validator = (ROOT / "scripts/validate_image.py").read_text()
-        self.assertIn('uart_stage_present = "uart_stage1_blob_start" in syms', image_validator)
+        self.assertIn('uart_stage_present = "loader_uart_stage1_copy_text" in syms', image_validator)
         self.assertIn("writer_expected = warnings_expected or uart_stage_present", image_validator)
         self.assertIn('"postmerkos.vcoreiii-linuxloader-build.v7"', manifest)
 
@@ -237,8 +242,10 @@ class SourceContractTests(unittest.TestCase):
         config = (ROOT / "scripts/check_config.py").read_text()
         self.assertIn("UART_RAMLOADER_RAM_END ?= 0x87f00000", makefile)
         self.assertIn("UART_RAMLOADER_STAGE1_ADDR ?= 0xa7f00000", makefile)
+        self.assertIn("UART_RAMLOADER_STAGE1_FLASH_OFFSET ?= 0x00020000", makefile)
         self.assertIn("expected_alias = args.uart_ram_end + 0x20000000", config)
         self.assertIn("UART stage1 must begin at the uncached alias", config)
+        self.assertIn("shared UART stage must begin at boot-region offset 0x20000", config)
 
     def test_payload_packer_generates_loader_compatible_crc(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -292,6 +299,34 @@ class SourceContractTests(unittest.TestCase):
             )
             self.assertEqual(verified.returncode, 0, verified.stderr)
             self.assertIn("payload header and CRC are valid", verified.stdout)
+
+    def test_pmoslive_uses_safe_low_page_boot_params_and_120m_initrd_map(self) -> None:
+        source = (ROOT / "payloads/uart-liveboot/liveboot.c").read_text()
+        descriptor = (ROOT / "payloads/uart-liveboot/write_descriptor.py").read_text()
+        manifest = (ROOT / "scripts/write_manifest.py").read_text()
+        readme = (ROOT / "payloads/uart-liveboot/README.md").read_text()
+
+        for text in (source, descriptor):
+            self.assertIn("MEM_MIB=120", text)
+            self.assertNotIn("MEM_MIB=112", text)
+        self.assertIn("#define LIVE_KERNEL_MEMORY_MIB 120u", source)
+        self.assertIn("#define LIVE_BOOT_PARAMS_PHYS_BASE 0x00000400u", source)
+        self.assertIn("#define LIVE_BOOT_PARAMS_BYTES 0x00000c00u", source)
+        self.assertIn("PMOSLIVE boot parameters must remain in physical 0x400-0xfff", source)
+        self.assertIn('LIVE_ADD_ARG("mem=120M")', source)
+        self.assertIn("BOOT-PARAMS-OVERFLOW", source)
+        self.assertNotIn("0xa0001000u", source)
+        self.assertNotIn("mem=112M", source)
+
+        for text in (descriptor, manifest):
+            self.assertIn('"boot_params_physical_address": 0x00000400', text)
+            self.assertIn('"boot_params_uncached_address": 0xA0000400', text)
+            self.assertIn('"boot_params_bytes": 0x00000C00', text)
+            self.assertIn('"linux_memory_mib": 120', text)
+            self.assertIn('"top_reserved_mib": 8', text)
+
+        self.assertIn("physical 112-120 MiB", readme)
+        self.assertIn("physical 120-128 MiB", readme)
 
 
 if __name__ == "__main__":

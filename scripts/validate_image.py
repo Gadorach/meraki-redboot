@@ -67,6 +67,8 @@ def main() -> int:
     ap.add_argument("--loader", type=Path, required=True)
     ap.add_argument("--image", type=Path, required=True)
     ap.add_argument("--symbols", type=Path, required=True)
+    ap.add_argument("--shared-stage", type=Path)
+    ap.add_argument("--shared-stage-offset", type=lambda value: int(value, 0))
     args = ap.parse_args()
 
     loader = args.loader.read_bytes()
@@ -110,8 +112,26 @@ def main() -> int:
     active, alen = decode_desc(image, ACTIVE_DESC)
     if flen != len(loader) or alen != len(loader):
         die("descriptor length does not equal compiled loader length")
-    if fallback + flen != BOOT_SIZE:
-        die("fallback copy does not end at 0x40000")
+    syms = symbols(args.symbols)
+    uart_stage_present = "loader_uart_stage1_copy_text" in syms
+    if uart_stage_present:
+        if args.shared_stage is None or args.shared_stage_offset is None:
+            die("UART-enabled loader validation requires the shared stage binary and offset")
+        stage = args.shared_stage.read_bytes()
+        stage_offset = args.shared_stage_offset
+        if fallback + flen != stage_offset:
+            die("fallback copy does not end at the shared UART stage boundary")
+        if image[stage_offset : stage_offset + len(stage)] != stage:
+            die("shared UART stage differs from uart-stage1.bin")
+        if stage_offset + len(stage) > BOOT_SIZE:
+            die("shared UART stage exceeds the boot region")
+    else:
+        if args.shared_stage is not None or args.shared_stage_offset is not None:
+            die("non-UART loader unexpectedly supplied shared-stage metadata")
+        stage = b""
+        stage_offset = BOOT_SIZE
+        if fallback + flen != BOOT_SIZE:
+            die("fallback copy does not end at 0x40000")
     if active + alen != fallback:
         die("active and fallback copies are not contiguous")
     if image[active : active + alen] != loader:
@@ -119,7 +139,6 @@ def main() -> int:
     if image[fallback : fallback + flen] != loader:
         die("fallback embedded copy differs from loader.bin")
 
-    syms = symbols(args.symbols)
     if "loader_hard_size_reject_branch" not in syms:
         die("missing mandatory hard-size rejection symbol")
     hard_word = u32(loader, syms["loader_hard_size_reject_branch"])
@@ -152,7 +171,6 @@ def main() -> int:
         die("CRC-enabled loader is missing the CRC table")
 
     warnings_expected = args.crc_policy == "warn" or args.size_policy == "legacy-warn"
-    uart_stage_present = "uart_stage1_blob_start" in syms
     writer_expected = warnings_expected or uart_stage_present
     if writer_expected and "loader_uart_puts" not in syms:
         die("assembly UART writer is required by warnings or the UART stage shim")
@@ -165,6 +183,8 @@ def main() -> int:
     )
     print(f"  active:   0x{active:05x}-0x{active + alen - 1:05x}")
     print(f"  fallback: 0x{fallback:05x}-0x{fallback + flen - 1:05x}")
+    if uart_stage_present:
+        print(f"  stage1:   0x{stage_offset:05x}-0x{stage_offset + len(stage) - 1:05x}")
     return 0
 
 

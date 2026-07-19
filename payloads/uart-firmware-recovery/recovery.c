@@ -1,7 +1,7 @@
 /*
  * postmerkOS pre-kernel UART firmware recovery payload, protocol v3.
  *
- * This flat MIPS program is loaded at 0x81000000 by LinuxLoader. It receives a
+ * This flat MIPS program is loaded at 0x86c00000 by LinuxLoader. It receives a
  * manifest-bound 16 MiB firmware image through acknowledged CRC-32 frames,
  * checks whole-object SHA-256, validates target compatibility and flash
  * geometry, then performs an explicitly challenged full-NOR rewrite.

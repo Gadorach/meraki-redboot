@@ -15,10 +15,6 @@ SECTIONS
         *(.lit4*)
         *(.lit8*)
     }
-    .uart_stage1_blob : ALIGN(4)
-    {
-        KEEP(*(.uart_stage1_blob))
-    }
     __end = .;
     __loader_end = .;
 

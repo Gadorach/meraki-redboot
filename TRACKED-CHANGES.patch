@@ -1,0 +1,1067 @@
+diff --git a/Makefile b/Makefile
+index 0028252..38af6dd 100644
+--- a/Makefile
++++ b/Makefile
+@@ -25,6 +25,8 @@ UART_MENU_TIMEOUT_MS ?= 5000
+ UART_RAMLOADER_COUNT_HZ ?= 208000000
+ UART_RAMLOADER_STAGE1_ADDR ?= 0xa7f00000
+ UART_RAMLOADER_STAGE1_MAX_SIZE ?= 0x00100000
++UART_RAMLOADER_STAGE1_FLASH_OFFSET ?= 0x00020000
++UART_RAMLOADER_STAGE1_FLASH_MAX_SIZE ?= 0x00020000
+ 
+ VALID_CRC_POLICIES := strict warn off
+ VALID_SIZE_POLICIES := legacy-strict legacy-warn hard-only
+@@ -68,6 +70,10 @@ RECOVERY_ARTIFACT_DIR := $(WORK_ROOT)/recovery/artifacts
+ RECOVERY_STAMP := $(WORK_ROOT)/recovery/.built
+ RECOVERY_LUTON26_BIN := $(RECOVERY_ARTIFACT_DIR)/recovery-luton26.bin
+ RECOVERY_JAGUAR1_BIN := $(RECOVERY_ARTIFACT_DIR)/recovery-jaguar1.bin
++LIVEBOOT_BUILD_DIR := $(WORK_ROOT)/liveboot/build
++LIVEBOOT_ARTIFACT_DIR := $(WORK_ROOT)/liveboot/artifacts
++LIVEBOOT_STAMP := $(WORK_ROOT)/liveboot/.built
++LIVEBOOT_JAGUAR1_BIN := $(LIVEBOOT_ARTIFACT_DIR)/pmoslive-jaguar1.bin
+ UART_STAGE1_DIR := $(BUILD_DIR)/uart-stage1
+ UART_STAGE1_ENTRY_OBJ := $(UART_STAGE1_DIR)/entry.o
+ UART_STAGE1_C_OBJ := $(UART_STAGE1_DIR)/uart_ramloader.o
+@@ -82,7 +88,13 @@ LOADER_MAP := $(BUILD_DIR)/loader.map
+ LOADER_SYM := $(BUILD_DIR)/loader.sym
+ WRAPPER_ELF := $(BUILD_DIR)/boot-region.elf
+ WRAPPER_OBJ := $(BUILD_DIR)/boot_wrapper.o
+-WRAPPER_FIT_SHELL = fallback=$$((0x40000 - len)); active=$$((fallback - len)); test $$active -ge 4096 || { echo 'loader is too large for dual-slot 256 KiB boot region' >&2; exit 1; }
++WRAPPER_FIT_SHELL = \
++	(( stage_offset >= 4096 )) || { echo 'shared-stage boundary overlaps reset vectors' >&2; exit 1; }; \
++	(( stage_offset <= 0x40000 )) || { echo 'shared-stage boundary exceeds the 256 KiB boot region' >&2; exit 1; }; \
++	(( stage_size >= 0 )) || exit 1; \
++	(( stage_offset + stage_size <= 0x40000 )) || { echo 'shared UART stage exceeds the 256 KiB boot region' >&2; exit 1; }; \
++	fallback=$$((stage_offset - len)); active=$$((fallback - len)); \
++	test $$active -ge 4096 || { echo 'dual loader copies do not fit before the shared UART stage' >&2; exit 1; }
+ 
+ CPP_CRC_strict := -DCONFIG_CRC_POLICY_STRICT=1
+ CPP_CRC_warn := -DCONFIG_CRC_POLICY_WARN=1
+@@ -162,15 +174,21 @@ HEAD_EXTRA_DEPS += $(UART_STAGE1_BIN)
+ endif
+ UART_STAGE1_RECOVERY_CPPFLAGS = \
+ 	-DRECOVERY_LUTON26_FILE=\"$(abspath $(RECOVERY_LUTON26_BIN))\" \
+-	-DRECOVERY_JAGUAR1_FILE=\"$(abspath $(RECOVERY_JAGUAR1_BIN))\"
++	-DRECOVERY_JAGUAR1_FILE=\"$(abspath $(RECOVERY_JAGUAR1_BIN))\" \
++	-DLIVEBOOT_JAGUAR1_FILE=\"$(abspath $(LIVEBOOT_JAGUAR1_BIN))\"
+ 
+ UART_STAGE1_CPPFLAGS = $(if $(UART_STAGE1_ENABLED),\
++	-DUART_STAGE1_SIZE=$(shell stat -c %s '$(UART_STAGE1_BIN)' 2>/dev/null || echo 0) \
++	-DUART_STAGE1_LOAD_ADDR=$(UART_RAMLOADER_STAGE1_ADDR) \
++	-DUART_STAGE1_FLASH_OFFSET=$(UART_RAMLOADER_STAGE1_FLASH_OFFSET),)
++
++WRAPPER_STAGE1_CPPFLAGS = $(if $(UART_STAGE1_ENABLED),\
+ 	-DUART_STAGE1_FILE=\"$(abspath $(UART_STAGE1_BIN))\" \
+ 	-DUART_STAGE1_SIZE=$(shell stat -c %s '$(UART_STAGE1_BIN)' 2>/dev/null || echo 0) \
+-	-DUART_STAGE1_LOAD_ADDR=$(UART_RAMLOADER_STAGE1_ADDR),)
++	-DUART_STAGE1_OFFSET=$(UART_RAMLOADER_STAGE1_FLASH_OFFSET),)
+ 
+ .PHONY: all __all-local __loader-local raw image validate inspect variants reference-check check-tools \
+-	check-toolchain check-config clean distclean deps toolchain distrobox refresh-source test test-wrapper-fit payload recovery-payloads support-bundle work-layout help
++	check-toolchain check-config clean distclean deps toolchain distrobox refresh-source test test-wrapper-fit payload recovery-payloads liveboot-payloads support-bundle work-layout help
+ 
+ # `make all` is the user-facing dispatcher. It prompts once on an interactive
+ # terminal and then invokes the internal target either natively or in Distrobox.
+@@ -188,12 +206,14 @@ all:
+ 	  "UART_RAMLOADER_COUNT_HZ=$(UART_RAMLOADER_COUNT_HZ)" \
+ 	  "UART_RAMLOADER_STAGE1_ADDR=$(UART_RAMLOADER_STAGE1_ADDR)" \
+ 	  "UART_RAMLOADER_STAGE1_MAX_SIZE=$(UART_RAMLOADER_STAGE1_MAX_SIZE)" \
++	  "UART_RAMLOADER_STAGE1_FLASH_OFFSET=$(UART_RAMLOADER_STAGE1_FLASH_OFFSET)" \
++	  "UART_RAMLOADER_STAGE1_FLASH_MAX_SIZE=$(UART_RAMLOADER_STAGE1_FLASH_MAX_SIZE)" \
+ 	  "SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)" "WORK_ROOT=$(WORK_ROOT)"
+ 
+ __loader-local: check-tools check-toolchain check-config image validate
+ 
+ # A successful default build produces the boot region and both RAM recovery tools.
+-__all-local: __loader-local recovery-payloads
++__all-local: __loader-local recovery-payloads liveboot-payloads
+ 
+ raw: check-tools check-toolchain check-config $(LOADER_BIN)
+ 
+@@ -238,7 +258,9 @@ check-config:
+ 	  --uart-menu-timeout-ms '$(UART_MENU_TIMEOUT_MS)' \
+ 	  --uart-count-hz '$(UART_RAMLOADER_COUNT_HZ)' \
+ 	  --uart-stage1-addr '$(UART_RAMLOADER_STAGE1_ADDR)' \
+-	  --uart-stage1-max-size '$(UART_RAMLOADER_STAGE1_MAX_SIZE)'
++	  --uart-stage1-max-size '$(UART_RAMLOADER_STAGE1_MAX_SIZE)' \
++	  --uart-stage1-flash-offset '$(UART_RAMLOADER_STAGE1_FLASH_OFFSET)' \
++	  --uart-stage1-flash-max-size '$(UART_RAMLOADER_STAGE1_FLASH_MAX_SIZE)'
+ 
+ $(BUILD_DIR) $(OUT_DIR) $(ARTIFACT_DIR) $(LOG_DIR) $(SUPPORT_DIR) $(UART_STAGE1_DIR):
+ 	@mkdir -p $@
+@@ -257,8 +279,8 @@ $(UART_STAGE1_C_OBJ): src/uart_ramloader.c include/postmerkos_uart_crypto.h | $(
+ 	@$(OBJDUMP) -drwC $@ > $@.dis
+ 	@$(READELF) -rW $@ > $@.relocs
+ 
+-$(UART_STAGE1_RECOVERY_OBJ): src/uart_stage1_recovery_blobs.S $(RECOVERY_LUTON26_BIN) $(RECOVERY_JAGUAR1_BIN) | $(UART_STAGE1_DIR)
+-	@echo "  AS      $@ (embedded Luton26/Jaguar1 recovery)"
++$(UART_STAGE1_RECOVERY_OBJ): src/uart_stage1_recovery_blobs.S $(RECOVERY_LUTON26_BIN) $(RECOVERY_JAGUAR1_BIN) $(LIVEBOOT_JAGUAR1_BIN) | $(UART_STAGE1_DIR)
++	@echo "  AS      $@ (embedded Luton26/Jaguar1 recovery + Jaguar1 PMOSLIVE)"
+ 	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(STAGE1_ASFLAGS) $(UART_STAGE1_RECOVERY_CPPFLAGS) -c $< -o $@
+ 	@$(OBJDUMP) -drwC $@ > $@.dis
+ 	@$(READELF) -rW $@ > $@.relocs
+@@ -329,13 +351,16 @@ $(LOADER_BIN): $(LOADER_ELF)
+ 	@test $$(stat -c %s $@) -gt 0
+ 	@test $$(( $$(stat -c %s $@) % 4 )) -eq 0
+ 
+-$(WRAPPER_OBJ): src/boot_wrapper.S $(LOADER_BIN) | $(BUILD_DIR)
++$(WRAPPER_OBJ): src/boot_wrapper.S $(LOADER_BIN) $(HEAD_EXTRA_DEPS) | $(BUILD_DIR)
+ 	@echo "  AS      $@"
+ 	@len=$$(stat -c %s $(LOADER_BIN)); \
++	 stage_offset=$$(( $(if $(UART_STAGE1_ENABLED),$(UART_RAMLOADER_STAGE1_FLASH_OFFSET),0x40000) )); \
++	 stage_size=$$(( $(if $(UART_STAGE1_ENABLED),$$(stat -c %s $(UART_STAGE1_BIN)),0) )); \
++	 test $$stage_size -le $$(( $(UART_RAMLOADER_STAGE1_FLASH_MAX_SIZE) )) || { echo 'shared UART stage exceeds its flash reservation' >&2; exit 1; }; \
+ 	 $(WRAPPER_FIT_SHELL); \
+ 	 SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(ASFLAGS) \
+ 	   -DACTIVE_OFFSET=$$active -DFALLBACK_OFFSET=$$fallback -DLOADER_LENGTH=$$len \
+-	   -DLOADER_FILE=\"$(abspath $(LOADER_BIN))\" -c $< -o $@
++	   -DLOADER_FILE=\"$(abspath $(LOADER_BIN))\" $(WRAPPER_STAGE1_CPPFLAGS) -c $< -o $@
+ 
+ $(WRAPPER_ELF): $(WRAPPER_OBJ) src/wrapper.lds
+ 	@echo "  LD      $@"
+@@ -393,7 +418,8 @@ $(ARTIFACT).manifest.json: $(ARTIFACT) $(LOADER_BIN)
+ 	  --uart-interbyte-timeout-ms '$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)' \
+ 	  --uart-menu-timeout-ms '$(UART_MENU_TIMEOUT_MS)' \
+ 	  --uart-stage1-addr '$(UART_RAMLOADER_STAGE1_ADDR)' \
+-	  $(if $(UART_STAGE1_ENABLED),--uart-stage1-elf '$(UART_STAGE1_ELF)' --uart-stage1-bin '$(UART_STAGE1_BIN)' --recovery-luton26-bin '$(RECOVERY_LUTON26_BIN)' --recovery-jaguar1-bin '$(RECOVERY_JAGUAR1_BIN)',) \
++	  --uart-stage1-flash-offset '$(UART_RAMLOADER_STAGE1_FLASH_OFFSET)' \
++	  $(if $(UART_STAGE1_ENABLED),--uart-stage1-elf '$(UART_STAGE1_ELF)' --uart-stage1-bin '$(UART_STAGE1_BIN)' --recovery-luton26-bin '$(RECOVERY_LUTON26_BIN)' --recovery-jaguar1-bin '$(RECOVERY_JAGUAR1_BIN)' --liveboot-jaguar1-bin '$(LIVEBOOT_JAGUAR1_BIN)',) \
+ 	  --compiler '$(CC)' --linker '$(LD)' \
+ 	  --toolchain-id "$$(./scripts/toolchain-env.sh --print-id)" \
+ 	  --loader $(LOADER_BIN) --image $(ARTIFACT) --output $@
+@@ -404,7 +430,8 @@ $(ARTIFACT).manifest.json.sha256: $(ARTIFACT).manifest.json
+ validate: check-config $(ARTIFACT) $(LOADER_BIN) $(LOADER_SYM)
+ 	@python3 scripts/validate_image.py \
+ 	  --variant '$(VARIANT)' --crc-policy '$(CRC_POLICY)' --size-policy '$(SIZE_POLICY)' \
+-	  --loader $(LOADER_BIN) --image $(ARTIFACT) --symbols $(LOADER_SYM)
++	  --loader $(LOADER_BIN) --image $(ARTIFACT) --symbols $(LOADER_SYM) \
++	  $(if $(UART_STAGE1_ENABLED),--shared-stage $(UART_STAGE1_BIN) --shared-stage-offset $(UART_RAMLOADER_STAGE1_FLASH_OFFSET),)
+ 
+ inspect: $(ARTIFACT) $(LOADER_BIN) $(LOADER_SYM)
+ 	@python3 scripts/inspect_image.py --loader $(LOADER_BIN) --image $(ARTIFACT) --symbols $(LOADER_SYM)
+@@ -441,6 +468,23 @@ $(RECOVERY_LUTON26_BIN) $(RECOVERY_JAGUAR1_BIN): $(RECOVERY_STAMP)
+ 
+ recovery-payloads: $(RECOVERY_STAMP)
+ 
++$(LIVEBOOT_STAMP): payloads/uart-liveboot/liveboot.c \
++                    payloads/uart-liveboot/entry.S \
++                    payloads/uart-liveboot/Makefile \
++                    payloads/uart-liveboot/linker.ld \
++                    payloads/uart-liveboot/write_descriptor.py \
++                    payloads/uart-firmware-recovery/recovery.c \
++                    include/postmerkos_uart_crypto.h | check-tools check-toolchain
++	@$(MAKE) -C payloads/uart-liveboot CROSS_COMPILE='$(CROSS_COMPILE)' \
++	  BUILD_DIR='$(LIVEBOOT_BUILD_DIR)' ARTIFACT_DIR='$(LIVEBOOT_ARTIFACT_DIR)' all
++	@mkdir -p '$(dir $(LIVEBOOT_STAMP))'
++	@touch '$(LIVEBOOT_STAMP)'
++
++$(LIVEBOOT_JAGUAR1_BIN): $(LIVEBOOT_STAMP)
++	@test -s '$@'
++
++liveboot-payloads: $(LIVEBOOT_STAMP)
++
+ work-layout:
+ 	@echo "Work root:      $(WORK_ROOT)"
+ 	@echo "Toolchain:     $(TOOLCHAIN_ROOT)"
+@@ -449,6 +493,7 @@ work-layout:
+ 	@echo "Artifacts:     $(ARTIFACT_DIR)"
+ 	@echo "UART stage1:   $(UART_STAGE1_DIR)"
+ 	@echo "Recovery:      $(WORK_ROOT)/recovery"
++	@echo "PMOSLIVE:      $(WORK_ROOT)/liveboot"
+ 	@echo "Logs:          $(LOG_DIR)"
+ 
+ support-bundle: | $(SUPPORT_DIR)
+@@ -487,12 +532,15 @@ distrobox:
+ 	  "SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)" "WORK_ROOT=$(WORK_ROOT)"
+ 
+ test-wrapper-fit:
+-	@len=21080; $(WRAPPER_FIT_SHELL); test $$active -eq $$((0x40000 - 2 * len))
++	@len=21080; stage_offset=$$(( $(UART_RAMLOADER_STAGE1_FLASH_OFFSET) )); stage_size=117832; \
++	 $(WRAPPER_FIT_SHELL); test $$active -eq $$((stage_offset - 2 * len)); \
++	 test $$fallback -eq $$((stage_offset - len))
+ 
+ test:
+ 	@python3 -m unittest discover -s tests -p 'test_*.py' -v
+ 	@./scripts/structural-test-clang.sh
+ 	@./scripts/structural-test-recovery-clang.sh
++	@./scripts/structural-test-liveboot-clang.sh
+ 
+ clean:
+ 	@rm -rf '$(WORK_ROOT)/build' '$(WORK_ROOT)/out' '$(WORK_ROOT)/artifacts' '$(WORK_ROOT)/recovery' '$(WORK_ROOT)/logs' '$(WORK_ROOT)/support'
+diff --git a/README.md b/README.md
+index fc84a21..924a1b4 100644
+--- a/README.md
++++ b/README.md
+@@ -16,7 +16,8 @@ offset `0x40000`.
+ The generated boot region contains:
+ 
+ - reset and exception vectors plus the dual-descriptor wrapper;
+-- two independently placed copies of the same current LinuxLoader build;
++- two independently placed copies of the same compact LinuxLoader build;
++- one immutable fixed-RAM UART stage shared by both loader copies;
+ - Luton26 and Jaguar-class hardware initialization;
+ - compile-time CRC and payload-size policy paths;
+ - an optional fixed-RAM stage containing the UART uploader and both platform-specific firmware recovery images;
+@@ -117,7 +118,8 @@ combination that can cross the next owned flash region.
+ The default `development` profile includes the UART RAM loader. Pass
+ `UART_RAMLOADER=0` to produce a development image without it. The UART engine
+ is deliberately **not** linked as callable C inside the relocatable flash
+-loader. Instead it is linked at `0xa7f00000`, embedded as data, copied through
++loader. Instead it is linked at `0xa7f00000`, stored once at boot-region offset
++`0x20000`, copied through
+ its uncached KSEG1 address after DDR and the stack are live, and entered with a
+ non-returning assembly `jr`. Stage 1 owns all remaining boot work, including
+ normal flash-kernel validation/copy and final kernel entry. This avoids the direct `J/JAL` and absolute-literal behavior of
+@@ -219,7 +221,8 @@ PMOSBOOT MENU-READY TIMEOUT_MS=00001388
+ ```
+ 
+ `1` enters a persistent `PMOSRAM READY 2` upload listener. `2` copies and runs
+-the embedded recovery matching the detected SoC. Invalid input or no explicit
++the embedded recovery matching the detected SoC. `3` copies and runs the
++embedded Jaguar1 PMOSLIVE payload. Invalid input or no explicit
+ selection prints `WARN-MENU-*` and resumes normal boot. Fatal flash-image checks
+ print the exact `FAIL-*` values and automatically launch the matching embedded
+ recovery rather than chaining to the historical flash fallback.
+diff --git a/docs/BOOT-REGION-FORMAT.md b/docs/BOOT-REGION-FORMAT.md
+index 9e22b1d..a71cda6 100644
+--- a/docs/BOOT-REGION-FORMAT.md
++++ b/docs/BOOT-REGION-FORMAT.md
+@@ -17,14 +17,18 @@ source-built copies of the same LinuxLoader body.
+ ...      padding
+ ...      active source-built loader body
+ ...      fallback source-built loader body
++0x20000  shared fixed-RAM UART stage (UART-enabled profiles)
++...      stage padding / reserved expansion space
+ 0x40000  end of loader region and start of SPIM payload header
+ ```
+ 
+ Each descriptor contains a position-independent jump sequence and the loader
+-length. The wrapper computes both body offsets from the current linked loader
+-size. The active selector enters the active copy; the fallback descriptor is
+-available to the loader's region-stride fallback mechanism. No opaque executable
+-body is embedded.
++length. For UART-enabled profiles, both compact loader bodies are placed below
++`0x20000` and reference one shared, source-built stage-1 blob at that fixed
++offset. This avoids duplicating the recovery and PMOSLIVE payloads while retaining
++independent active and fallback loader bodies. The active selector enters the
++active copy; the fallback descriptor is available to the loader's region-stride
++fallback mechanism. No opaque executable body is embedded.
+ 
+ ## Payload geometry
+ 
+diff --git a/docs/BUILDING.md b/docs/BUILDING.md
+index 332a3a3..5dc62b7 100644
+--- a/docs/BUILDING.md
++++ b/docs/BUILDING.md
+@@ -179,7 +179,8 @@ Every release build also checks:
+ - fixed UART stage entry at `0xa7f00000`, no BSS/dynamic/GOT state, and all
+   direct stage calls remaining inside its reserved window;
+ - entry point at link address zero;
+-- dual-copy wrapper fit and exact 256 KiB image size.
++- dual-copy wrapper fit, one shared stage-1 blob at offset `0x20000`, and exact
++  256 KiB image size.
+ 
+ ## Kernel payload
+ 
+diff --git a/payloads/uart-firmware-recovery/Makefile b/payloads/uart-firmware-recovery/Makefile
+index 4da6784..8f95f4b 100644
+--- a/payloads/uart-firmware-recovery/Makefile
++++ b/payloads/uart-firmware-recovery/Makefile
+@@ -36,11 +36,11 @@ $(BUILD_DIR)/recovery-jaguar1.o: recovery.c $(ROOT)/include/postmerkos_uart_cryp
+ 
+ $(BUILD_DIR)/recovery-luton26.elf: $(BUILD_DIR)/entry.o $(BUILD_DIR)/recovery-luton26.o linker.ld
+ 	$(LD) $(LDFLAGS) $(BUILD_DIR)/entry.o $(BUILD_DIR)/recovery-luton26.o -o $@
+-	@$(READELF) -h $@ | grep -Eq "Entry point address:[[:space:]]+0x81000000$$"
++	@$(READELF) -h $@ | grep -Eq "Entry point address:[[:space:]]+0x86c00000$$"
+ 
+ $(BUILD_DIR)/recovery-jaguar1.elf: $(BUILD_DIR)/entry.o $(BUILD_DIR)/recovery-jaguar1.o linker.ld
+ 	$(LD) $(LDFLAGS) $(BUILD_DIR)/entry.o $(BUILD_DIR)/recovery-jaguar1.o -o $@
+-	@$(READELF) -h $@ | grep -Eq "Entry point address:[[:space:]]+0x81000000$$"
++	@$(READELF) -h $@ | grep -Eq "Entry point address:[[:space:]]+0x86c00000$$"
+ 
+ $(ARTIFACT_DIR)/recovery-%.bin: $(BUILD_DIR)/recovery-%.elf | $(ARTIFACT_DIR)
+ 	$(OBJCOPY) -O binary $< $@
+diff --git a/payloads/uart-firmware-recovery/entry.S b/payloads/uart-firmware-recovery/entry.S
+index ae798dc..7d4413c 100644
+--- a/payloads/uart-firmware-recovery/entry.S
++++ b/payloads/uart-firmware-recovery/entry.S
+@@ -4,8 +4,8 @@
+     .global _start
+     .ent _start
+ _start:
+-    /* Keep the recovery stack below the 0x81400000 firmware staging area. */
+-    lui     $sp, 0x813f
++    /* Keep the recovery stack inside the high-RAM recovery execution window. */
++    lui     $sp, 0x86ff
+     ori     $sp, $sp, 0xf000
+ 
+     /* Initialise gp even when a newer compiler emits small-data references. */
+diff --git a/payloads/uart-firmware-recovery/linker.ld b/payloads/uart-firmware-recovery/linker.ld
+index 048b662..64be8aa 100644
+--- a/payloads/uart-firmware-recovery/linker.ld
++++ b/payloads/uart-firmware-recovery/linker.ld
+@@ -2,7 +2,7 @@ OUTPUT_ARCH(mips)
+ ENTRY(_start)
+ SECTIONS
+ {
+-  . = 0x81000000;
++  . = 0x86c00000;
+   __recovery_load_start = .;
+ 
+   .text : ALIGN(4)
+@@ -41,6 +41,6 @@ SECTIONS
+     *(.gnu.attributes)
+   }
+ 
+-  ASSERT(_start == 0x81000000, "recovery flat-binary entry is not byte zero")
+-  ASSERT(__recovery_load_end < 0x81400000, "recovery payload overlaps firmware staging")
++  ASSERT(_start == 0x86c00000, "recovery flat-binary entry is not byte zero")
++  ASSERT(__recovery_load_end < 0x87000000, "recovery payload exceeds high-RAM execution window")
+ }
+diff --git a/payloads/uart-firmware-recovery/recovery.c b/payloads/uart-firmware-recovery/recovery.c
+index f486f32..111e1dc 100644
+--- a/payloads/uart-firmware-recovery/recovery.c
++++ b/payloads/uart-firmware-recovery/recovery.c
+@@ -1,7 +1,7 @@
+ /*
+  * postmerkOS pre-kernel UART firmware recovery payload, protocol v3.
+  *
+- * This flat MIPS program is loaded at 0x81000000 by LinuxLoader. It receives a
++ * This flat MIPS program is loaded at 0x86c00000 by LinuxLoader. It receives a
+  * manifest-bound 16 MiB firmware image through acknowledged CRC-32 frames,
+  * checks whole-object SHA-256, validates target compatibility and flash
+  * geometry, then performs an explicitly challenged full-NOR rewrite.
+diff --git a/payloads/uart-firmware-recovery/write_descriptor.py b/payloads/uart-firmware-recovery/write_descriptor.py
+index 69618e4..4bae1da 100755
+--- a/payloads/uart-firmware-recovery/write_descriptor.py
++++ b/payloads/uart-firmware-recovery/write_descriptor.py
+@@ -59,8 +59,8 @@ def main() -> int:
+             "confirmation_retry": "infinite",
+             "automatic_reboot_seconds": 5,
+         },
+-        "load_address": 0x81000000,
+-        "entry_address": 0x81000000,
++        "load_address": 0x86C00000,
++        "entry_address": 0x86C00000,
+         "entry_contract": "flat-binary-byte-zero-v1",
+         "manifest_lookup_contract": "direct-object-members-v1",
+         "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
+diff --git a/scripts/check_config.py b/scripts/check_config.py
+index 54ce37c..cee2e0b 100755
+--- a/scripts/check_config.py
++++ b/scripts/check_config.py
+@@ -31,6 +31,8 @@ def main() -> int:
+     ap.add_argument("--uart-count-hz", type=parse_int, required=True)
+     ap.add_argument("--uart-stage1-addr", type=parse_int, required=True)
+     ap.add_argument("--uart-stage1-max-size", type=parse_int, required=True)
++    ap.add_argument("--uart-stage1-flash-offset", type=parse_int, required=True)
++    ap.add_argument("--uart-stage1-flash-max-size", type=parse_int, required=True)
+     args = ap.parse_args()
+ 
+     if args.fallback_region_size <= 0 or args.fallback_region_size & (args.fallback_region_size - 1):
+@@ -75,6 +77,12 @@ def main() -> int:
+             ap.error("UART stage1 reserved size must be in 1..0x100000")
+         if args.uart_stage1_addr + args.uart_stage1_max_size > 0xA8000000:
+             ap.error("UART stage1 exceeds the 128 MiB DRAM top boundary")
++        if args.uart_stage1_flash_offset != 0x00020000:
++            ap.error("shared UART stage must begin at boot-region offset 0x20000")
++        if args.uart_stage1_flash_max_size != 0x00020000:
++            ap.error("shared UART stage flash reservation must be 0x20000 bytes")
++        if args.uart_stage1_flash_offset + args.uart_stage1_flash_max_size > args.loader_region_size:
++            ap.error("shared UART stage flash reservation exceeds the loader region")
+ 
+     print(
+         "configuration: "
+@@ -84,7 +92,8 @@ def main() -> int:
+         f"uart={'enabled' if bool_value(args.uart_ramloader) else 'disabled'} "
+         f"uart-ram=0x{args.uart_ram_start:x}-0x{args.uart_ram_end:x} "
+         f"menu-ms={args.uart_menu_timeout_ms} "
+-        f"stage1=0x{args.uart_stage1_addr:x}+0x{args.uart_stage1_max_size:x}"
++        f"stage1=0x{args.uart_stage1_addr:x}+0x{args.uart_stage1_max_size:x} "
++        f"stage1-flash=0x{args.uart_stage1_flash_offset:x}+0x{args.uart_stage1_flash_max_size:x}"
+     )
+     return 0
+ 
+diff --git a/scripts/structural-test-clang.sh b/scripts/structural-test-clang.sh
+index 1ed7fe8..6879886 100755
+--- a/scripts/structural-test-clang.sh
++++ b/scripts/structural-test-clang.sh
+@@ -21,6 +21,7 @@ stage1_addr=0xa7f00000
+ stage1_max=0x00100000
+ printf 'PMOSRECOVERY3;SOC=luton26;STRUCTURAL\n' > "$tmp/recovery-luton26.bin"
+ printf 'PMOSRECOVERY3;SOC=jaguar1;STRUCTURAL\n' > "$tmp/recovery-jaguar1.bin"
++printf 'PMOSLIVE3;SOC=jaguar1;STRUCTURAL\n' > "$tmp/pmoslive-jaguar1.bin"
+ 
+ if [[ -n ${PROFILE_FILTER:-} ]]; then read -r -a profiles <<<"$PROFILE_FILTER"; else profiles=(strict development permissive strict-uart); fi
+ for variant in "${profiles[@]}"; do
+@@ -54,6 +55,7 @@ for variant in "${profiles[@]}"; do
+     clang "${common[@]}" -D__ASSEMBLY__ -x assembler-with-cpp \
+       -DRECOVERY_LUTON26_FILE=\"$tmp/recovery-luton26.bin\" \
+       -DRECOVERY_JAGUAR1_FILE=\"$tmp/recovery-jaguar1.bin\" \
++      -DLIVEBOOT_JAGUAR1_FILE=\"$tmp/pmoslive-jaguar1.bin\" \
+       -c "$root/src/uart_stage1_recovery_blobs.S" -o "$dir/stage1-recovery.o"
+     ld.lld -m elf32ltsmip -static -nostdlib -T "$root/src/uart_stage1.lds" \
+       --defsym=UART_STAGE1_LOAD_ADDR=$stage1_addr --defsym=UART_STAGE1_MAX_SIZE=$stage1_max \
+@@ -63,8 +65,8 @@ for variant in "${profiles[@]}"; do
+       --objdump llvm-objdump --readelf "$readelf_tool" --nm "$nm_tool" \
+       --load-address $stage1_addr --max-size $stage1_max
+     stage1_size=$(stat -c %s "$dir/uart-stage1.bin")
+-    stage1_defs=(-DUART_STAGE1_FILE=\"$dir/uart-stage1.bin\" \
+-      -DUART_STAGE1_SIZE=$stage1_size -DUART_STAGE1_LOAD_ADDR=$stage1_addr)
++    stage1_defs=(-DUART_STAGE1_SIZE=$stage1_size \
++      -DUART_STAGE1_LOAD_ADDR=$stage1_addr -DUART_STAGE1_FLASH_OFFSET=0x20000)
+   fi
+ 
+   clang "${common[@]}" -D__ASSEMBLY__ -x assembler-with-cpp "${defs[@]}" "${stage1_defs[@]}" \
+@@ -76,15 +78,32 @@ for variant in "${profiles[@]}"; do
+   llvm-objcopy -O binary "$dir/loader.elf" "$dir/loader.bin"
+   "$nm_tool" -n "$dir/loader.elf" > "$dir/loader.sym"
+   len=$(stat -c %s "$dir/loader.bin")
+-  fallback=$((0x40000 - len)); active=$((fallback - len))
++  stage_offset=0x40000
++  stage_size=0
++  wrapper_stage_defs=()
++  if [[ $uart == 1 ]]; then
++    stage_offset=0x20000
++    stage_size=$(stat -c %s "$dir/uart-stage1.bin")
++    wrapper_stage_defs=(-DUART_STAGE1_FILE=\"$dir/uart-stage1.bin\" \
++      -DUART_STAGE1_SIZE=$stage_size -DUART_STAGE1_OFFSET=$stage_offset)
++  fi
++  (( stage_offset + stage_size <= 0x40000 ))
++  fallback=$((stage_offset - len)); active=$((fallback - len))
++  (( active >= 0x1000 ))
+   clang "${common[@]}" -D__ASSEMBLY__ -x assembler-with-cpp \
+     -DACTIVE_OFFSET=$active -DFALLBACK_OFFSET=$fallback -DLOADER_LENGTH=$len \
+-    -DLOADER_FILE=\"$dir/loader.bin\" -c "$root/src/boot_wrapper.S" -o "$dir/wrapper.o"
++    -DLOADER_FILE=\"$dir/loader.bin\" "${wrapper_stage_defs[@]}" \
++    -c "$root/src/boot_wrapper.S" -o "$dir/wrapper.o"
+   ld.lld -m elf32ltsmip -static -nostdlib -T "$root/src/wrapper.lds" -o "$dir/boot-region.elf" "$dir/wrapper.o"
+   llvm-objcopy -O binary -j .boot "$dir/boot-region.elf" "$dir/image.bin"
++  validator_stage_args=()
++  if [[ $uart == 1 ]]; then
++    validator_stage_args=(--shared-stage "$dir/uart-stage1.bin" --shared-stage-offset 0x20000)
++  fi
+   python3 "$root/scripts/validate_image.py" --variant "$variant" \
+     --crc-policy "$crc_policy" --size-policy "$size_policy" \
+-    --loader "$dir/loader.bin" --image "$dir/image.bin" --symbols "$dir/loader.sym"
++    --loader "$dir/loader.bin" --image "$dir/image.bin" --symbols "$dir/loader.sym" \
++    "${validator_stage_args[@]}"
+ done
+ 
+ make -C "$root" --no-print-directory test-wrapper-fit
+diff --git a/scripts/structural-test-recovery-clang.sh b/scripts/structural-test-recovery-clang.sh
+index 8763947..d1885b2 100755
+--- a/scripts/structural-test-recovery-clang.sh
++++ b/scripts/structural-test-recovery-clang.sh
+@@ -17,8 +17,8 @@ for family in 1 2; do
+   ld.lld -m elf32ltsmip -static -nostdlib \
+     -T "$root/payloads/uart-firmware-recovery/linker.ld" \
+     "$tmp/entry.o" "$tmp/recovery-$family.o" -o "$tmp/recovery-$family.elf"
+-  readelf -h "$tmp/recovery-$family.elf" | grep -Eq 'Entry point address:[[:space:]]+0x81000000$'
+-  readelf -s "$tmp/recovery-$family.elf" | grep -Eq '[[:space:]]81000000[[:space:]].*[[:space:]]_start$'
++  readelf -h "$tmp/recovery-$family.elf" | grep -Eq 'Entry point address:[[:space:]]+0x86c00000$'
++  readelf -s "$tmp/recovery-$family.elf" | grep -Eq '[[:space:]]86c00000[[:space:]].*[[:space:]]_start$'
+   llvm-objcopy -O binary "$tmp/recovery-$family.elf" "$tmp/recovery-$family.bin"
+   test "$(stat -c %s "$tmp/recovery-$family.bin")" -gt 0
+   test "$(stat -c %s "$tmp/recovery-$family.bin")" -le 4194304
+diff --git a/scripts/validate_image.py b/scripts/validate_image.py
+index 8e17860..a715afa 100755
+--- a/scripts/validate_image.py
++++ b/scripts/validate_image.py
+@@ -67,6 +67,8 @@ def main() -> int:
+     ap.add_argument("--loader", type=Path, required=True)
+     ap.add_argument("--image", type=Path, required=True)
+     ap.add_argument("--symbols", type=Path, required=True)
++    ap.add_argument("--shared-stage", type=Path)
++    ap.add_argument("--shared-stage-offset", type=lambda value: int(value, 0))
+     args = ap.parse_args()
+ 
+     loader = args.loader.read_bytes()
+@@ -110,8 +112,26 @@ def main() -> int:
+     active, alen = decode_desc(image, ACTIVE_DESC)
+     if flen != len(loader) or alen != len(loader):
+         die("descriptor length does not equal compiled loader length")
+-    if fallback + flen != BOOT_SIZE:
+-        die("fallback copy does not end at 0x40000")
++    syms = symbols(args.symbols)
++    uart_stage_present = "loader_uart_stage1_copy_text" in syms
++    if uart_stage_present:
++        if args.shared_stage is None or args.shared_stage_offset is None:
++            die("UART-enabled loader validation requires the shared stage binary and offset")
++        stage = args.shared_stage.read_bytes()
++        stage_offset = args.shared_stage_offset
++        if fallback + flen != stage_offset:
++            die("fallback copy does not end at the shared UART stage boundary")
++        if image[stage_offset : stage_offset + len(stage)] != stage:
++            die("shared UART stage differs from uart-stage1.bin")
++        if stage_offset + len(stage) > BOOT_SIZE:
++            die("shared UART stage exceeds the boot region")
++    else:
++        if args.shared_stage is not None or args.shared_stage_offset is not None:
++            die("non-UART loader unexpectedly supplied shared-stage metadata")
++        stage = b""
++        stage_offset = BOOT_SIZE
++        if fallback + flen != BOOT_SIZE:
++            die("fallback copy does not end at 0x40000")
+     if active + alen != fallback:
+         die("active and fallback copies are not contiguous")
+     if image[active : active + alen] != loader:
+@@ -119,7 +139,6 @@ def main() -> int:
+     if image[fallback : fallback + flen] != loader:
+         die("fallback embedded copy differs from loader.bin")
+ 
+-    syms = symbols(args.symbols)
+     if "loader_hard_size_reject_branch" not in syms:
+         die("missing mandatory hard-size rejection symbol")
+     hard_word = u32(loader, syms["loader_hard_size_reject_branch"])
+@@ -152,7 +171,6 @@ def main() -> int:
+         die("CRC-enabled loader is missing the CRC table")
+ 
+     warnings_expected = args.crc_policy == "warn" or args.size_policy == "legacy-warn"
+-    uart_stage_present = "uart_stage1_blob_start" in syms
+     writer_expected = warnings_expected or uart_stage_present
+     if writer_expected and "loader_uart_puts" not in syms:
+         die("assembly UART writer is required by warnings or the UART stage shim")
+@@ -165,6 +183,8 @@ def main() -> int:
+     )
+     print(f"  active:   0x{active:05x}-0x{active + alen - 1:05x}")
+     print(f"  fallback: 0x{fallback:05x}-0x{fallback + flen - 1:05x}")
++    if uart_stage_present:
++        print(f"  stage1:   0x{stage_offset:05x}-0x{stage_offset + len(stage) - 1:05x}")
+     return 0
+ 
+ 
+diff --git a/scripts/validate_loader_codegen.py b/scripts/validate_loader_codegen.py
+index dc58afd..1111fb7 100755
+--- a/scripts/validate_loader_codegen.py
++++ b/scripts/validate_loader_codegen.py
+@@ -117,13 +117,15 @@ def validate_entry(readelf: str, elf: Path) -> None:
+ 
+ def validate_uart_embedding(nm: str, elf: Path) -> None:
+     data = elf.read_bytes()
+-    if b"PMOSRAM READY 2" not in data:
++    if b"PMOSRAM STAGE1 COPY" not in data:
+         return
+     output = run(nm, "-n", str(elf))
+     names = {line.split()[-1] for line in output.splitlines() if line.split()}
+-    for required in ("uart_stage1_blob_start", "uart_stage1_blob_end"):
+-        if required not in names:
+-            raise ValueError(f"embedded UART stage1 is missing symbol {required}")
++    for forbidden in ("uart_stage1_blob_start", "uart_stage1_blob_end"):
++        if forbidden in names:
++            raise ValueError(f"relocatable loader still duplicates shared UART stage symbol {forbidden}")
++    if "loader_uart_stage1_copy_text" not in names:
++        raise ValueError("UART-enabled loader is missing the shared-stage copy shim")
+     if "uart_ramloader_probe_and_run" in names:
+         raise ValueError("ordinary UART C was linked into relocatable flash code")
+ 
+diff --git a/scripts/validate_uart_stage1.py b/scripts/validate_uart_stage1.py
+index 9cde9fd..c61eae7 100755
+--- a/scripts/validate_uart_stage1.py
++++ b/scripts/validate_uart_stage1.py
+@@ -123,6 +123,7 @@ def main() -> int:
+         for marker in (
+             b"PMOSRAM READY 2",
+             b"PMOSBOOT",
++            b"LIVEBOOT",
+             b"PMOSRAM",
+             b"PASS",
+             b"WARN",
+@@ -138,6 +139,8 @@ def main() -> int:
+             b"MENU-PROBE",
+             b"MENU-READY",
+             b"FW-RECOVERY",
++            b"3=LIVEBOOT",
++            b"PMOSLIVE3;SOC=jaguar1",
+             b"RECOVERY-COPY",
+             b"PMOSRECOVERY3;SOC=luton26",
+             b"PMOSRECOVERY3;SOC=jaguar1",
+@@ -150,6 +153,7 @@ def main() -> int:
+             "uart_stage1_entry", "uart_stage1_main", "uart_stage1_jump_kernel",
+             "recovery_luton26_blob_start", "recovery_luton26_blob_end",
+             "recovery_jaguar1_blob_start", "recovery_jaguar1_blob_end",
++            "liveboot_jaguar1_blob_start", "liveboot_jaguar1_blob_end",
+         ):
+             if required not in symbol_names:
+                 raise ValueError(f"stage lacks required symbol {required}")
+diff --git a/scripts/write_manifest.py b/scripts/write_manifest.py
+index ace517e..f325937 100755
+--- a/scripts/write_manifest.py
++++ b/scripts/write_manifest.py
+@@ -40,10 +40,12 @@ def main() -> int:
+     ap.add_argument("--uart-interbyte-timeout-ms", type=integer, required=True)
+     ap.add_argument("--uart-menu-timeout-ms", type=integer, required=True)
+     ap.add_argument("--uart-stage1-addr", type=integer, required=True)
++    ap.add_argument("--uart-stage1-flash-offset", type=integer, required=True)
+     ap.add_argument("--uart-stage1-elf", type=Path)
+     ap.add_argument("--uart-stage1-bin", type=Path)
+     ap.add_argument("--recovery-luton26-bin", type=Path)
+     ap.add_argument("--recovery-jaguar1-bin", type=Path)
++    ap.add_argument("--liveboot-jaguar1-bin", type=Path)
+     ap.add_argument("--compiler", required=True)
+     ap.add_argument("--linker", required=True)
+     ap.add_argument("--toolchain-id", required=True)
+@@ -54,12 +56,15 @@ def main() -> int:
+     sources = sorted(Path("src").glob("*")) + sorted(Path("include").rglob("*.h"))
+     uart_enabled = enabled(args.uart_ramloader)
+     loader_data = args.loader.read_bytes()
+-    if uart_enabled and b"PMOSRAM READY 2" not in loader_data:
+-        raise SystemExit("UART RAM-loader was requested but the embedded stage1 marker is absent")
++    image_data = args.image.read_bytes()
++    if uart_enabled and b"PMOSRAM READY 2" not in image_data:
++        raise SystemExit("UART RAM-loader was requested but the shared stage1 marker is absent")
+     if uart_enabled and (args.uart_stage1_elf is None or args.uart_stage1_bin is None):
+         raise SystemExit("UART RAM-loader requires stage1 ELF and binary metadata")
+     if uart_enabled and (args.recovery_luton26_bin is None or args.recovery_jaguar1_bin is None):
+         raise SystemExit("UART stage requires both embedded platform recovery binaries")
++    if uart_enabled and args.liveboot_jaguar1_bin is None:
++        raise SystemExit("UART stage requires the embedded Jaguar1 PMOSLIVE binary")
+     if args.uart_ram_start >= args.uart_ram_end:
+         raise SystemExit("UART RAM range is invalid")
+     compiler_version = subprocess.run(
+@@ -107,15 +112,17 @@ def main() -> int:
+             "supported_soc_families": ["luton26", "jaguar1"],
+             "transport_integrity": ["frame-crc32", "object-crc32", "object-sha256"],
+             "cache_maintenance": "mips32r2-dcache-writeback-invalidate-icache-invalidate",
+-            "execution_model": "fixed-RAM boot menu owns UART upload, embedded platform recovery, and flash-kernel continuation",
++            "execution_model": "fixed-RAM boot menu owns UART upload, embedded platform recovery, PMOSLIVE, and flash-kernel continuation",
+             "boot_menu": {
+                 "probe_timeout_ms": args.uart_probe_timeout_ms,
+                 "selection_timeout_ms": args.uart_menu_timeout_ms,
+-                "options": {"1": "uart-ramloader", "2": "embedded-firmware-recovery"},
++                "options": {"1": "uart-ramloader", "2": "embedded-firmware-recovery", "3": "embedded-liveboot"},
+                 "noise_behavior": "invalid/no explicit option continues normal boot",
+             },
+             "image_check_diagnostics": "structured-pass-warn-fail-skip-values-v1",
+             "stage1_load_address": args.uart_stage1_addr if uart_enabled else None,
++            "stage1_flash_offset": args.uart_stage1_flash_offset if uart_enabled else None,
++            "stage1_storage_contract": "single-shared-boot-region-blob-v1" if uart_enabled else None,
+             "stage1_elf": ({
+                 "path": str(args.uart_stage1_elf),
+                 "size": args.uart_stage1_elf.stat().st_size,
+@@ -131,8 +138,8 @@ def main() -> int:
+                     "path": str(args.recovery_luton26_bin),
+                     "size": args.recovery_luton26_bin.stat().st_size,
+                     "sha256": sha(args.recovery_luton26_bin),
+-                    "load_address": 0x81000000,
+-                    "entry_address": 0x81000000,
++                    "load_address": 0x86C00000,
++                    "entry_address": 0x86C00000,
+                     "entry_contract": "flat-binary-byte-zero-v1",
+                     "manifest_lookup_contract": "direct-object-members-v1",
+                     "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
+@@ -143,8 +150,8 @@ def main() -> int:
+                     "path": str(args.recovery_jaguar1_bin),
+                     "size": args.recovery_jaguar1_bin.stat().st_size,
+                     "sha256": sha(args.recovery_jaguar1_bin),
+-                    "load_address": 0x81000000,
+-                    "entry_address": 0x81000000,
++                    "load_address": 0x86C00000,
++                    "entry_address": 0x86C00000,
+                     "entry_contract": "flat-binary-byte-zero-v1",
+                     "manifest_lookup_contract": "direct-object-members-v1",
+                     "hardware_preflight_contract": "spi-nor-scratch-rw-restore-loader-crc-v4",
+@@ -152,6 +159,28 @@ def main() -> int:
+                     "adaptive_transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
+                 },
+             } if uart_enabled else None),
++            "embedded_liveboot": ({
++                "jaguar1": {
++                    "path": str(args.liveboot_jaguar1_bin),
++                    "size": args.liveboot_jaguar1_bin.stat().st_size,
++                    "sha256": sha(args.liveboot_jaguar1_bin),
++                    "load_address": 0x86C00000,
++                    "entry_address": 0x86C00000,
++                    "entry_contract": "flat-binary-byte-zero-v1",
++                    "flash_access": "none",
++                    "accepted_models": ["MS42", "MS42P"],
++                    "transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
++                    "linux_handoff": "mips-legacy-argc-argv-envp-external-initrd-v1",
++                    "rootfs_handoff": "squashfs-as-legacy-initrd-v1",
++                    "kernel_load_address": 0x81000000,
++                    "squashfs_address": 0x87000000,
++                    "boot_params_physical_address": 0x00000400,
++                    "boot_params_uncached_address": 0xA0000400,
++                    "boot_params_bytes": 0x00000C00,
++                    "linux_memory_mib": 120,
++                    "top_reserved_mib": 8,
++                },
++            } if uart_enabled else None),
+         },
+         "loader": {
+             "path": str(args.loader),
+@@ -167,11 +196,13 @@ def main() -> int:
+         "notes": [
+             "Built entirely from source; GPL-adjacent RedBoot binaries are not build inputs.",
+             "The 256 KiB wrapper contains active and fallback copies of the same compiled loader.",
++            "UART-enabled wrappers store one shared source-built stage-1 blob at flash offset 0x20000 rather than duplicating it in both loader bodies.",
+             "The hard payload boundary is enforced independently of the selected compatibility policy.",
+             "Non-strict size policies reproduce the historical 32-byte rounded copy for unaligned declared sizes.",
+             "Flash-kernel and UART executable checks emit structured PASS/WARN/FAIL/SKIP records with compared values.",
+-            "The flash-resident loader contains no ordinary C UART calls; fixed-RAM stage 1 owns the explicit boot menu, UART upload, embedded platform recovery, SPIM kernel validation/copy, and kernel entry.",
++            "The flash-resident loader contains no ordinary C UART calls; fixed-RAM stage 1 owns the explicit boot menu, UART upload, embedded platform recovery, embedded Jaguar1 PMOSLIVE, SPIM kernel validation/copy, and kernel entry.",
+             "Fatal flash-kernel validation failures launch the embedded recovery matching the detected SoC family.",
++            "Menu option 3 launches a flash-write-free PMOSLIVE payload for Jaguar1 MS42/MS42P development.",
+         ],
+     }
+     args.output.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+diff --git a/src/boot_wrapper.S b/src/boot_wrapper.S
+index 7636ddd..9606279 100644
+--- a/src/boot_wrapper.S
++++ b/src/boot_wrapper.S
+@@ -20,6 +20,21 @@
+ #error LOADER_FILE must be supplied by the build
+ #endif
+ 
++#if defined(UART_STAGE1_FILE)
++#ifndef UART_STAGE1_OFFSET
++#error UART_STAGE1_OFFSET must be supplied with UART_STAGE1_FILE
++#endif
++#ifndef UART_STAGE1_SIZE
++#error UART_STAGE1_SIZE must be supplied with UART_STAGE1_FILE
++#endif
++#if UART_STAGE1_OFFSET < 0x1000 || UART_STAGE1_OFFSET >= 0x40000
++#error UART_STAGE1_OFFSET must be inside the boot region and outside vectors
++#endif
++#if UART_STAGE1_SIZE <= 0 || (UART_STAGE1_OFFSET + UART_STAGE1_SIZE) > 0x40000
++#error Shared UART stage does not fit in the boot region
++#endif
++#endif
++
+ #define HI16(x) (((x) >> 16) & 0xffff)
+ #define LO16(x) ((x) & 0xffff)
+ 
+@@ -108,4 +123,13 @@ active_loader:
+ fallback_loader:
+     .incbin LOADER_FILE
+ 
++#if defined(UART_STAGE1_FILE)
++    .org UART_STAGE1_OFFSET, 0xff
++    .global shared_uart_stage1_blob
++shared_uart_stage1_blob:
++    .incbin UART_STAGE1_FILE
++    .global shared_uart_stage1_blob_end
++shared_uart_stage1_blob_end:
++#endif
++
+     .org 0x40000, 0xff
+diff --git a/src/head.S b/src/head.S
+index 5135604..f03a266 100644
+--- a/src/head.S
++++ b/src/head.S
+@@ -83,18 +83,21 @@
+ #endif
+ 
+ #if defined(CONFIG_UART_RAMLOADER)
+-#ifndef UART_STAGE1_FILE
+-#error UART_STAGE1_FILE must name the fixed-RAM UART engine binary
+-#endif
+ #ifndef UART_STAGE1_SIZE
+ #error UART_STAGE1_SIZE must be supplied by the build
+ #endif
+ #ifndef UART_STAGE1_LOAD_ADDR
+ #error UART_STAGE1_LOAD_ADDR must be supplied by the build
+ #endif
++#ifndef UART_STAGE1_FLASH_OFFSET
++#error UART_STAGE1_FLASH_OFFSET must locate the shared fixed-RAM stage in the boot region
++#endif
+ #if UART_STAGE1_SIZE <= 0
+ #error UART_STAGE1_SIZE must be positive
+ #endif
++#if UART_STAGE1_FLASH_OFFSET < 0x1000 || UART_STAGE1_FLASH_OFFSET >= LOADER_SIZE
++#error UART_STAGE1_FLASH_OFFSET must be inside the 256 KiB boot region and outside vectors
++#endif
+ #endif
+ 
+ #define REASON_STARTUP 		0		/* Power up */
+@@ -185,9 +188,13 @@ __start:bal	10f		/* Figure out where we are */
+ 	 * boot work: UART upload, flash-kernel validation/copy, and final entry.
+ 	 * It is entered with jr and is not expected to return to relocatable
+ 	 * flash code. */
+-	lui	t0, %hi(uart_stage1_blob_start)
+-	addiu	t0, t0, %lo(uart_stage1_blob_start)
+-	add	t0, t0, gp		/* Source in the active/fallback flash copy */
++	/* The wrapper stores one immutable stage-1 blob shared by both loader
++	 * copies. Recover the 256 KiB boot-region base from the current loader
++	 * address, then add the fixed shared-blob offset. */
++	li	t0, LOADER_MASK
++	and	t0, gp, t0
++	li	t4, UART_STAGE1_FLASH_OFFSET
++	add	t0, t0, t4
+ 	li	t1, UART_STAGE1_LOAD_ADDR	/* Uncached top-of-RAM destination */
+ 	li	t2, UART_STAGE1_SIZE
+ 1:	lbu	t3, 0(t0)
+@@ -620,16 +627,4 @@ crctab:
+ 
+ 	.align	4
+ 
+-#if defined(CONFIG_UART_RAMLOADER)
+-	.section .uart_stage1_blob, "a", @progbits
+-	.align 4
+-	.global uart_stage1_blob_start
+-uart_stage1_blob_start:
+-	.incbin UART_STAGE1_FILE
+-	.global uart_stage1_blob_end
+-uart_stage1_blob_end:
+-	.align 4
+-	.previous
+-#endif
+-
+ .global __start
+diff --git a/src/loader.lds b/src/loader.lds
+index 5ecd554..2c0452d 100644
+--- a/src/loader.lds
++++ b/src/loader.lds
+@@ -15,10 +15,6 @@ SECTIONS
+         *(.lit4*)
+         *(.lit8*)
+     }
+-    .uart_stage1_blob : ALIGN(4)
+-    {
+-        KEEP(*(.uart_stage1_blob))
+-    }
+     __end = .;
+     __loader_end = .;
+ 
+diff --git a/src/uart_ramloader.c b/src/uart_ramloader.c
+index a400803..b154b17 100644
+--- a/src/uart_ramloader.c
++++ b/src/uart_ramloader.c
+@@ -65,7 +65,8 @@ typedef pmos_u32 u32;
+ 
+ #define SPIM_LOADER_MAGIC 0x4d495053u
+ #define SPIM_HEADER_BYTES 32u
+-#define EMBEDDED_RECOVERY_LOAD_ADDR CONFIG_UART_RAMLOADER_RAM_START
++#define EMBEDDED_RECOVERY_LOAD_ADDR 0x86c00000u
++#define EMBEDDED_LIVEBOOT_LOAD_ADDR 0x86c00000u
+ #define STAGE_STACK_RESERVED_END 0x80004000u
+ 
+ struct spim_header {
+@@ -85,6 +86,8 @@ extern const u8 recovery_luton26_blob_start[];
+ extern const u8 recovery_luton26_blob_end[];
+ extern const u8 recovery_jaguar1_blob_start[];
+ extern const u8 recovery_jaguar1_blob_end[];
++extern const u8 liveboot_jaguar1_blob_start[];
++extern const u8 liveboot_jaguar1_blob_end[];
+ 
+ struct ram_header {
+     u32 magic0;
+@@ -585,6 +588,40 @@ static void launch_embedded_recovery(u32 soc_family, const char *source_check)
+     uart_stage1_jump_kernel(EMBEDDED_RECOVERY_LOAD_ADDR);
+ }
+ 
++static void launch_embedded_liveboot(u32 soc_family, const char *source_check)
++    __attribute__((noreturn));
++static void launch_embedded_liveboot(u32 soc_family, const char *source_check)
++{
++    const u8 *source = liveboot_jaguar1_blob_start;
++    const u8 *end = liveboot_jaguar1_blob_end;
++    volatile u8 *destination = (volatile u8 *)EMBEDDED_LIVEBOOT_LOAD_ADDR;
++    u32 size;
++    u32 i;
++
++    if (soc_family != RAMLOADER_SOC_JAGUAR1) {
++        report_pair("PMOSBOOT", "FAIL", "LIVEBOOT-SOC",
++                    "EXPECTED", RAMLOADER_SOC_JAGUAR1, "GOT", soc_family);
++        persistent_uart_ramloader(soc_family, "LIVEBOOT-UNSUPPORTED-SOC");
++    }
++    size = (u32)end - (u32)source;
++    report_prefix("PMOSBOOT", "INFO", "LIVEBOOT");
++    uart_puts("SOURCE: "); uart_puts(source_check);
++    uart_puts(" | SOC: jaguar1 | FLASH: DISABLED\n");
++    if (size == 0u || size > CONFIG_UART_RAMLOADER_MAX_SIZE) {
++        report_pair("PMOSBOOT", "FAIL", "LIVEBOOT-SIZE",
++                    "MAX", CONFIG_UART_RAMLOADER_MAX_SIZE, "GOT", size);
++        persistent_uart_ramloader(soc_family, "EMBEDDED-LIVEBOOT-SIZE");
++    }
++    uart_drain_rx();
++    for (i = 0u; i < size; i++) destination[i] = source[i];
++    report_pair("PMOSBOOT", "PASS", "LIVEBOOT-COPY",
++                "LOAD", EMBEDDED_LIVEBOOT_LOAD_ADDR, "SIZE", size);
++    cache_prepare_for_execution(EMBEDDED_LIVEBOOT_LOAD_ADDR, size);
++    report_value("PMOSBOOT", "PASS", "LIVEBOOT-EXEC",
++                 "ENTRY", EMBEDDED_LIVEBOOT_LOAD_ADDR);
++    uart_stage1_jump_kernel(EMBEDDED_LIVEBOOT_LOAD_ADDR);
++}
++
+ static void read_spim_header(struct spim_header *header, u8 raw[SPIM_HEADER_BYTES],
+                              u32 payload_header_addr)
+ {
+@@ -997,7 +1034,7 @@ void uart_stage1_main(u32 soc_family, u32 payload_header_addr,
+ 
+         report_value("PMOSBOOT", "PASS", "MENU-TRIGGER", "BYTE", trigger);
+         uart_drain_rx();
+-        uart_puts("PMOSBOOT MENU 1=UART-RAMLOADER 2=FW-RECOVERY\n");
++        uart_puts("PMOSBOOT MENU 1=UART-RAMLOADER 2=FW-RECOVERY 3=LIVEBOOT\n");
+         uart_puts("PMOSBOOT MENU-READY TIMEOUT_MS=");
+         uart_put_hex32(CONFIG_UART_MENU_TIMEOUT_MS);
+         uart_puts("\n");
+@@ -1015,13 +1052,18 @@ void uart_stage1_main(u32 soc_family, u32 payload_header_addr,
+                                  "SELECTED", 2u);
+                     launch_embedded_recovery(soc_family, "MENU-OPTION-2");
+                 }
++                if (choice == (u8)'3') {
++                    report_value("PMOSBOOT", "PASS", "MENU-CHOICE",
++                                 "SELECTED", 3u);
++                    launch_embedded_liveboot(soc_family, "MENU-OPTION-3");
++                }
+                 if (choice != (u8)'\r' && choice != (u8)'\n')
+                     report_value("PMOSBOOT", "WARN", "MENU-INPUT",
+                                  "IGNORED", (u32)choice);
+             }
+             if (timer_expired(&menu_timer, CONFIG_UART_MENU_TIMEOUT_MS)) {
+                 report_text("PMOSBOOT", "WARN", "MENU-TIMEOUT",
+-                            "NO EXPLICIT 1/2 SELECTION; CONTINUING NORMAL BOOT");
++                            "NO EXPLICIT 1/2/3 SELECTION; CONTINUING NORMAL BOOT");
+                 boot_flash_kernel(soc_family, payload_header_addr);
+             }
+         }
+diff --git a/src/uart_stage1_recovery_blobs.S b/src/uart_stage1_recovery_blobs.S
+index 994c50c..d0fafab 100644
+--- a/src/uart_stage1_recovery_blobs.S
++++ b/src/uart_stage1_recovery_blobs.S
+@@ -4,6 +4,9 @@
+ #endif
+ #ifndef RECOVERY_JAGUAR1_FILE
+ #error RECOVERY_JAGUAR1_FILE must name the Jaguar1 recovery binary
++#endif
++#ifndef LIVEBOOT_JAGUAR1_FILE
++#error LIVEBOOT_JAGUAR1_FILE must name the Jaguar1 PMOSLIVE binary
+ #endif
+ 
+     .section .uart_recovery, "a", @progbits
+@@ -21,3 +24,10 @@ recovery_jaguar1_blob_start:
+     .incbin RECOVERY_JAGUAR1_FILE
+ recovery_jaguar1_blob_end:
+     .balign 4
++
++    .global liveboot_jaguar1_blob_start
++    .global liveboot_jaguar1_blob_end
++liveboot_jaguar1_blob_start:
++    .incbin LIVEBOOT_JAGUAR1_FILE
++liveboot_jaguar1_blob_end:
++    .balign 4
+diff --git a/tests/test_source_contract.py b/tests/test_source_contract.py
+index 627a6c4..cecbf30 100644
+--- a/tests/test_source_contract.py
++++ b/tests/test_source_contract.py
+@@ -206,10 +206,15 @@ class SourceContractTests(unittest.TestCase):
+         manifest = (ROOT / "scripts/write_manifest.py").read_text()
+ 
+         self.assertIn("UART_RAMLOADER_STAGE1_ADDR ?= 0xa7f00000", makefile)
++        self.assertIn("UART_RAMLOADER_STAGE1_FLASH_OFFSET ?= 0x00020000", makefile)
+         self.assertIn("STAGE1_CFLAGS", makefile)
+         self.assertIn("UART_STAGE1_ELF", makefile)
+         self.assertNotRegex(makefile, r"LOADER_OBJECTS\s*[:+]?=.*uart_ramloader\.o")
+-        self.assertIn(".incbin UART_STAGE1_FILE", head)
++        self.assertNotIn(".incbin UART_STAGE1_FILE", head)
++        wrapper = (ROOT / "src/boot_wrapper.S").read_text()
++        self.assertIn(".incbin UART_STAGE1_FILE", wrapper)
++        self.assertIn("shared_uart_stage1_blob", wrapper)
++        self.assertIn("UART_STAGE1_FLASH_OFFSET", head)
+         self.assertIn("UART_STAGE1_LOAD_ADDR", head)
+         self.assertIn("jr\tt9", head)
+         self.assertIn("PMOSRAM STAGE1 COPY", head)
+@@ -228,7 +233,7 @@ class SourceContractTests(unittest.TestCase):
+         self.assertIn("PMOSRECOVERY3;SOC=jaguar1;STRUCTURAL", structural)
+         self.assertNotIn("PMOSRECOVERY2;SOC=", structural)
+         image_validator = (ROOT / "scripts/validate_image.py").read_text()
+-        self.assertIn('uart_stage_present = "uart_stage1_blob_start" in syms', image_validator)
++        self.assertIn('uart_stage_present = "loader_uart_stage1_copy_text" in syms', image_validator)
+         self.assertIn("writer_expected = warnings_expected or uart_stage_present", image_validator)
+         self.assertIn('"postmerkos.vcoreiii-linuxloader-build.v7"', manifest)
+ 
+@@ -237,8 +242,10 @@ class SourceContractTests(unittest.TestCase):
+         config = (ROOT / "scripts/check_config.py").read_text()
+         self.assertIn("UART_RAMLOADER_RAM_END ?= 0x87f00000", makefile)
+         self.assertIn("UART_RAMLOADER_STAGE1_ADDR ?= 0xa7f00000", makefile)
++        self.assertIn("UART_RAMLOADER_STAGE1_FLASH_OFFSET ?= 0x00020000", makefile)
+         self.assertIn("expected_alias = args.uart_ram_end + 0x20000000", config)
+         self.assertIn("UART stage1 must begin at the uncached alias", config)
++        self.assertIn("shared UART stage must begin at boot-region offset 0x20000", config)
+ 
+     def test_payload_packer_generates_loader_compatible_crc(self) -> None:
+         with tempfile.TemporaryDirectory() as td:
+@@ -293,6 +300,34 @@ class SourceContractTests(unittest.TestCase):
+             self.assertEqual(verified.returncode, 0, verified.stderr)
+             self.assertIn("payload header and CRC are valid", verified.stdout)
+ 
++    def test_pmoslive_uses_safe_low_page_boot_params_and_120m_initrd_map(self) -> None:
++        source = (ROOT / "payloads/uart-liveboot/liveboot.c").read_text()
++        descriptor = (ROOT / "payloads/uart-liveboot/write_descriptor.py").read_text()
++        manifest = (ROOT / "scripts/write_manifest.py").read_text()
++        readme = (ROOT / "payloads/uart-liveboot/README.md").read_text()
++
++        for text in (source, descriptor):
++            self.assertIn("MEM_MIB=120", text)
++            self.assertNotIn("MEM_MIB=112", text)
++        self.assertIn("#define LIVE_KERNEL_MEMORY_MIB 120u", source)
++        self.assertIn("#define LIVE_BOOT_PARAMS_PHYS_BASE 0x00000400u", source)
++        self.assertIn("#define LIVE_BOOT_PARAMS_BYTES 0x00000c00u", source)
++        self.assertIn("PMOSLIVE boot parameters must remain in physical 0x400-0xfff", source)
++        self.assertIn('LIVE_ADD_ARG("mem=120M")', source)
++        self.assertIn("BOOT-PARAMS-OVERFLOW", source)
++        self.assertNotIn("0xa0001000u", source)
++        self.assertNotIn("mem=112M", source)
++
++        for text in (descriptor, manifest):
++            self.assertIn('"boot_params_physical_address": 0x00000400', text)
++            self.assertIn('"boot_params_uncached_address": 0xA0000400', text)
++            self.assertIn('"boot_params_bytes": 0x00000C00', text)
++            self.assertIn('"linux_memory_mib": 120', text)
++            self.assertIn('"top_reserved_mib": 8', text)
++
++        self.assertIn("physical 112-120 MiB", readme)
++        self.assertIn("physical 120-128 MiB", readme)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/tests/test_uart_recovery_contract.py b/tests/test_uart_recovery_contract.py
+index cd81ef3..8574b5e 100644
+--- a/tests/test_uart_recovery_contract.py
++++ b/tests/test_uart_recovery_contract.py
+@@ -54,7 +54,11 @@ class UartRecoveryContractTests(unittest.TestCase):
+         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+         stage_linker = (ROOT / "src/uart_stage1.lds").read_text(encoding="utf-8")
+         entry_source = (ROOT / "src/uart_stage1_entry.S").read_text(encoding="utf-8")
+-        self.assertIn(".incbin UART_STAGE1_FILE", HEAD_SOURCE)
++        wrapper_source = (ROOT / "src/boot_wrapper.S").read_text(encoding="utf-8")
++        self.assertNotIn(".incbin UART_STAGE1_FILE", HEAD_SOURCE)
++        self.assertIn(".incbin UART_STAGE1_FILE", wrapper_source)
++        self.assertIn("shared_uart_stage1_blob", wrapper_source)
++        self.assertIn("UART_STAGE1_FLASH_OFFSET", HEAD_SOURCE)
+         self.assertIn("jr\tt9", HEAD_SOURCE)
+         self.assertNotIn("jalr\tt9", HEAD_SOURCE)
+         self.assertNotIn("bal\tuart_ramloader_probe_and_run", HEAD_SOURCE)
+@@ -118,13 +122,15 @@ class UartRecoveryContractTests(unittest.TestCase):
+         stage = LOADER_SOURCE
+         for token in (
+             "PMOSBOOT MENU-PROBE", "PMOSBOOT MENU-READY",
+-            "1=UART-RAMLOADER", "2=FW-RECOVERY",
++            "1=UART-RAMLOADER", "2=FW-RECOVERY", "3=LIVEBOOT",
+             "CONFIG_UART_MENU_TIMEOUT_MS", "MENU-OPTION-1", "MENU-OPTION-2",
+-            "NO EXPLICIT 1/2 SELECTION; CONTINUING NORMAL BOOT",
++            "MENU-OPTION-3",
++            "NO EXPLICIT 1/2/3 SELECTION; CONTINUING NORMAL BOOT",
+         ):
+             self.assertIn(token, stage)
+         self.assertIn("choice == (u8)'1'", stage)
+         self.assertIn("choice == (u8)'2'", stage)
++        self.assertIn("choice == (u8)'3'", stage)
+         self.assertIn("boot_flash_kernel(soc_family, payload_header_addr)", stage)
+ 
+ 
+@@ -154,10 +160,10 @@ class UartRecoveryContractTests(unittest.TestCase):
+         linker = (ROOT / "payloads/uart-firmware-recovery/linker.ld").read_text(encoding="utf-8")
+         makefile = (ROOT / "payloads/uart-firmware-recovery/Makefile").read_text(encoding="utf-8")
+         self.assertIn('.section .text.start', entry)
+-        self.assertIn('lui     $sp, 0x813f', entry)
++        self.assertIn('lui     $sp, 0x86ff', entry)
+         self.assertIn('jal     recovery_main', entry)
+         self.assertIn('KEEP(*(.text.start))', linker)
+-        self.assertIn('ASSERT(_start == 0x81000000', linker)
++        self.assertIn('ASSERT(_start == 0x86c00000', linker)
+         self.assertIn('*(.MIPS.abiflags)', linker)
+         self.assertIn('$(BUILD_DIR)/entry.o', makefile)
+         self.assertIn('Entry point address:', makefile)

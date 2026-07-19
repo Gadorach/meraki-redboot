@@ -123,6 +123,7 @@ def main() -> int:
         for marker in (
             b"PMOSRAM READY 2",
             b"PMOSBOOT",
+            b"LIVEBOOT",
             b"PMOSRAM",
             b"PASS",
             b"WARN",
@@ -138,6 +139,8 @@ def main() -> int:
             b"MENU-PROBE",
             b"MENU-READY",
             b"FW-RECOVERY",
+            b"3=LIVEBOOT",
+            b"PMOSLIVE3;SOC=jaguar1",
             b"RECOVERY-COPY",
             b"PMOSRECOVERY3;SOC=luton26",
             b"PMOSRECOVERY3;SOC=jaguar1",
@@ -150,6 +153,7 @@ def main() -> int:
             "uart_stage1_entry", "uart_stage1_main", "uart_stage1_jump_kernel",
             "recovery_luton26_blob_start", "recovery_luton26_blob_end",
             "recovery_jaguar1_blob_start", "recovery_jaguar1_blob_end",
+            "liveboot_jaguar1_blob_start", "liveboot_jaguar1_blob_end",
         ):
             if required not in symbol_names:
                 raise ValueError(f"stage lacks required symbol {required}")

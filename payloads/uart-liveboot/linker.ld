@@ -3,7 +3,7 @@ ENTRY(_start)
 SECTIONS
 {
   . = 0x86c00000;
-  __recovery_load_start = .;
+  __liveboot_load_start = .;
 
   .text : ALIGN(4)
   {
@@ -29,7 +29,7 @@ SECTIONS
     __bss_end = ALIGN(4);
   }
 
-  __recovery_load_end = .;
+  __liveboot_load_end = .;
 
   /DISCARD/ :
   {
@@ -41,6 +41,6 @@ SECTIONS
     *(.gnu.attributes)
   }
 
-  ASSERT(_start == 0x86c00000, "recovery flat-binary entry is not byte zero")
-  ASSERT(__recovery_load_end < 0x87000000, "recovery payload exceeds high-RAM execution window")
+  ASSERT(_start == 0x86c00000, "PMOSLIVE flat-binary entry is not byte zero")
+  ASSERT(__liveboot_load_end < 0x87000000, "PMOSLIVE overlaps the reserved RAM SquashFS")
 }

@@ -179,7 +179,8 @@ Every release build also checks:
 - fixed UART stage entry at `0xa7f00000`, no BSS/dynamic/GOT state, and all
   direct stage calls remaining inside its reserved window;
 - entry point at link address zero;
-- dual-copy wrapper fit and exact 256 KiB image size.
+- dual-copy wrapper fit, one shared stage-1 blob at offset `0x20000`, and exact
+  256 KiB image size.
 
 ## Kernel payload
 

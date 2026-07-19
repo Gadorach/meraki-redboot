@@ -1,0 +1,25 @@
+ M Makefile
+ M README.md
+ M docs/BOOT-REGION-FORMAT.md
+ M docs/BUILDING.md
+ M payloads/uart-firmware-recovery/Makefile
+ M payloads/uart-firmware-recovery/entry.S
+ M payloads/uart-firmware-recovery/linker.ld
+ M payloads/uart-firmware-recovery/recovery.c
+ M payloads/uart-firmware-recovery/write_descriptor.py
+ M scripts/check_config.py
+ M scripts/structural-test-clang.sh
+ M scripts/structural-test-recovery-clang.sh
+ M scripts/validate_image.py
+ M scripts/validate_loader_codegen.py
+ M scripts/validate_uart_stage1.py
+ M scripts/write_manifest.py
+ M src/boot_wrapper.S
+ M src/head.S
+ M src/loader.lds
+ M src/uart_ramloader.c
+ M src/uart_stage1_recovery_blobs.S
+ M tests/test_source_contract.py
+ M tests/test_uart_recovery_contract.py
+?? payloads/uart-liveboot/
+?? scripts/structural-test-liveboot-clang.sh

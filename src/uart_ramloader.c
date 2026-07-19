@@ -65,7 +65,8 @@ typedef pmos_u32 u32;
 
 #define SPIM_LOADER_MAGIC 0x4d495053u
 #define SPIM_HEADER_BYTES 32u
-#define EMBEDDED_RECOVERY_LOAD_ADDR CONFIG_UART_RAMLOADER_RAM_START
+#define EMBEDDED_RECOVERY_LOAD_ADDR 0x86c00000u
+#define EMBEDDED_LIVEBOOT_LOAD_ADDR 0x86c00000u
 #define STAGE_STACK_RESERVED_END 0x80004000u
 
 struct spim_header {
@@ -85,6 +86,8 @@ extern const u8 recovery_luton26_blob_start[];
 extern const u8 recovery_luton26_blob_end[];
 extern const u8 recovery_jaguar1_blob_start[];
 extern const u8 recovery_jaguar1_blob_end[];
+extern const u8 liveboot_jaguar1_blob_start[];
+extern const u8 liveboot_jaguar1_blob_end[];
 
 struct ram_header {
     u32 magic0;
@@ -585,6 +588,40 @@ static void launch_embedded_recovery(u32 soc_family, const char *source_check)
     uart_stage1_jump_kernel(EMBEDDED_RECOVERY_LOAD_ADDR);
 }
 
+static void launch_embedded_liveboot(u32 soc_family, const char *source_check)
+    __attribute__((noreturn));
+static void launch_embedded_liveboot(u32 soc_family, const char *source_check)
+{
+    const u8 *source = liveboot_jaguar1_blob_start;
+    const u8 *end = liveboot_jaguar1_blob_end;
+    volatile u8 *destination = (volatile u8 *)EMBEDDED_LIVEBOOT_LOAD_ADDR;
+    u32 size;
+    u32 i;
+
+    if (soc_family != RAMLOADER_SOC_JAGUAR1) {
+        report_pair("PMOSBOOT", "FAIL", "LIVEBOOT-SOC",
+                    "EXPECTED", RAMLOADER_SOC_JAGUAR1, "GOT", soc_family);
+        persistent_uart_ramloader(soc_family, "LIVEBOOT-UNSUPPORTED-SOC");
+    }
+    size = (u32)end - (u32)source;
+    report_prefix("PMOSBOOT", "INFO", "LIVEBOOT");
+    uart_puts("SOURCE: "); uart_puts(source_check);
+    uart_puts(" | SOC: jaguar1 | FLASH: DISABLED\n");
+    if (size == 0u || size > CONFIG_UART_RAMLOADER_MAX_SIZE) {
+        report_pair("PMOSBOOT", "FAIL", "LIVEBOOT-SIZE",
+                    "MAX", CONFIG_UART_RAMLOADER_MAX_SIZE, "GOT", size);
+        persistent_uart_ramloader(soc_family, "EMBEDDED-LIVEBOOT-SIZE");
+    }
+    uart_drain_rx();
+    for (i = 0u; i < size; i++) destination[i] = source[i];
+    report_pair("PMOSBOOT", "PASS", "LIVEBOOT-COPY",
+                "LOAD", EMBEDDED_LIVEBOOT_LOAD_ADDR, "SIZE", size);
+    cache_prepare_for_execution(EMBEDDED_LIVEBOOT_LOAD_ADDR, size);
+    report_value("PMOSBOOT", "PASS", "LIVEBOOT-EXEC",
+                 "ENTRY", EMBEDDED_LIVEBOOT_LOAD_ADDR);
+    uart_stage1_jump_kernel(EMBEDDED_LIVEBOOT_LOAD_ADDR);
+}
+
 static void read_spim_header(struct spim_header *header, u8 raw[SPIM_HEADER_BYTES],
                              u32 payload_header_addr)
 {
@@ -997,7 +1034,7 @@ void uart_stage1_main(u32 soc_family, u32 payload_header_addr,
 
         report_value("PMOSBOOT", "PASS", "MENU-TRIGGER", "BYTE", trigger);
         uart_drain_rx();
-        uart_puts("PMOSBOOT MENU 1=UART-RAMLOADER 2=FW-RECOVERY\n");
+        uart_puts("PMOSBOOT MENU 1=UART-RAMLOADER 2=FW-RECOVERY 3=LIVEBOOT\n");
         uart_puts("PMOSBOOT MENU-READY TIMEOUT_MS=");
         uart_put_hex32(CONFIG_UART_MENU_TIMEOUT_MS);
         uart_puts("\n");
@@ -1015,13 +1052,18 @@ void uart_stage1_main(u32 soc_family, u32 payload_header_addr,
                                  "SELECTED", 2u);
                     launch_embedded_recovery(soc_family, "MENU-OPTION-2");
                 }
+                if (choice == (u8)'3') {
+                    report_value("PMOSBOOT", "PASS", "MENU-CHOICE",
+                                 "SELECTED", 3u);
+                    launch_embedded_liveboot(soc_family, "MENU-OPTION-3");
+                }
                 if (choice != (u8)'\r' && choice != (u8)'\n')
                     report_value("PMOSBOOT", "WARN", "MENU-INPUT",
                                  "IGNORED", (u32)choice);
             }
             if (timer_expired(&menu_timer, CONFIG_UART_MENU_TIMEOUT_MS)) {
                 report_text("PMOSBOOT", "WARN", "MENU-TIMEOUT",
-                            "NO EXPLICIT 1/2 SELECTION; CONTINUING NORMAL BOOT");
+                            "NO EXPLICIT 1/2/3 SELECTION; CONTINUING NORMAL BOOT");
                 boot_flash_kernel(soc_family, payload_header_addr);
             }
         }

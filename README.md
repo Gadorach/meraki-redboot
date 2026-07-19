@@ -16,7 +16,8 @@ offset `0x40000`.
 The generated boot region contains:
 
 - reset and exception vectors plus the dual-descriptor wrapper;
-- two independently placed copies of the same current LinuxLoader build;
+- two independently placed copies of the same compact LinuxLoader build;
+- one immutable fixed-RAM UART stage shared by both loader copies;
 - Luton26 and Jaguar-class hardware initialization;
 - compile-time CRC and payload-size policy paths;
 - an optional fixed-RAM stage containing the UART uploader and both platform-specific firmware recovery images;
@@ -117,7 +118,8 @@ combination that can cross the next owned flash region.
 The default `development` profile includes the UART RAM loader. Pass
 `UART_RAMLOADER=0` to produce a development image without it. The UART engine
 is deliberately **not** linked as callable C inside the relocatable flash
-loader. Instead it is linked at `0xa7f00000`, embedded as data, copied through
+loader. Instead it is linked at `0xa7f00000`, stored once at boot-region offset
+`0x20000`, copied through
 its uncached KSEG1 address after DDR and the stack are live, and entered with a
 non-returning assembly `jr`. Stage 1 owns all remaining boot work, including
 normal flash-kernel validation/copy and final kernel entry. This avoids the direct `J/JAL` and absolute-literal behavior of
@@ -219,7 +221,8 @@ PMOSBOOT MENU-READY TIMEOUT_MS=00001388
 ```
 
 `1` enters a persistent `PMOSRAM READY 2` upload listener. `2` copies and runs
-the embedded recovery matching the detected SoC. Invalid input or no explicit
+the embedded recovery matching the detected SoC. `3` copies and runs the
+embedded Jaguar1 PMOSLIVE payload. Invalid input or no explicit
 selection prints `WARN-MENU-*` and resumes normal boot. Fatal flash-image checks
 print the exact `FAIL-*` values and automatically launch the matching embedded
 recovery rather than chaining to the historical flash fallback.

@@ -54,7 +54,11 @@ class UartRecoveryContractTests(unittest.TestCase):
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         stage_linker = (ROOT / "src/uart_stage1.lds").read_text(encoding="utf-8")
         entry_source = (ROOT / "src/uart_stage1_entry.S").read_text(encoding="utf-8")
-        self.assertIn(".incbin UART_STAGE1_FILE", HEAD_SOURCE)
+        wrapper_source = (ROOT / "src/boot_wrapper.S").read_text(encoding="utf-8")
+        self.assertNotIn(".incbin UART_STAGE1_FILE", HEAD_SOURCE)
+        self.assertIn(".incbin UART_STAGE1_FILE", wrapper_source)
+        self.assertIn("shared_uart_stage1_blob", wrapper_source)
+        self.assertIn("UART_STAGE1_FLASH_OFFSET", HEAD_SOURCE)
         self.assertIn("jr\tt9", HEAD_SOURCE)
         self.assertNotIn("jalr\tt9", HEAD_SOURCE)
         self.assertNotIn("bal\tuart_ramloader_probe_and_run", HEAD_SOURCE)
@@ -118,13 +122,15 @@ class UartRecoveryContractTests(unittest.TestCase):
         stage = LOADER_SOURCE
         for token in (
             "PMOSBOOT MENU-PROBE", "PMOSBOOT MENU-READY",
-            "1=UART-RAMLOADER", "2=FW-RECOVERY",
+            "1=UART-RAMLOADER", "2=FW-RECOVERY", "3=LIVEBOOT",
             "CONFIG_UART_MENU_TIMEOUT_MS", "MENU-OPTION-1", "MENU-OPTION-2",
-            "NO EXPLICIT 1/2 SELECTION; CONTINUING NORMAL BOOT",
+            "MENU-OPTION-3",
+            "NO EXPLICIT 1/2/3 SELECTION; CONTINUING NORMAL BOOT",
         ):
             self.assertIn(token, stage)
         self.assertIn("choice == (u8)'1'", stage)
         self.assertIn("choice == (u8)'2'", stage)
+        self.assertIn("choice == (u8)'3'", stage)
         self.assertIn("boot_flash_kernel(soc_family, payload_header_addr)", stage)
 
 
@@ -154,10 +160,10 @@ class UartRecoveryContractTests(unittest.TestCase):
         linker = (ROOT / "payloads/uart-firmware-recovery/linker.ld").read_text(encoding="utf-8")
         makefile = (ROOT / "payloads/uart-firmware-recovery/Makefile").read_text(encoding="utf-8")
         self.assertIn('.section .text.start', entry)
-        self.assertIn('lui     $sp, 0x813f', entry)
+        self.assertIn('lui     $sp, 0x86ff', entry)
         self.assertIn('jal     recovery_main', entry)
         self.assertIn('KEEP(*(.text.start))', linker)
-        self.assertIn('ASSERT(_start == 0x81000000', linker)
+        self.assertIn('ASSERT(_start == 0x86c00000', linker)
         self.assertIn('*(.MIPS.abiflags)', linker)
         self.assertIn('$(BUILD_DIR)/entry.o', makefile)
         self.assertIn('Entry point address:', makefile)

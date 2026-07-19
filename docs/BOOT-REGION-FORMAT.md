@@ -17,14 +17,18 @@ source-built copies of the same LinuxLoader body.
 ...      padding
 ...      active source-built loader body
 ...      fallback source-built loader body
+0x20000  shared fixed-RAM UART stage (UART-enabled profiles)
+...      stage padding / reserved expansion space
 0x40000  end of loader region and start of SPIM payload header
 ```
 
 Each descriptor contains a position-independent jump sequence and the loader
-length. The wrapper computes both body offsets from the current linked loader
-size. The active selector enters the active copy; the fallback descriptor is
-available to the loader's region-stride fallback mechanism. No opaque executable
-body is embedded.
+length. For UART-enabled profiles, both compact loader bodies are placed below
+`0x20000` and reference one shared, source-built stage-1 blob at that fixed
+offset. This avoids duplicating the recovery and PMOSLIVE payloads while retaining
+independent active and fallback loader bodies. The active selector enters the
+active copy; the fallback descriptor is available to the loader's region-stride
+fallback mechanism. No opaque executable body is embedded.
 
 ## Payload geometry
 

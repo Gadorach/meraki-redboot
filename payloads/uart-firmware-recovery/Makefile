@@ -36,11 +36,11 @@ $(BUILD_DIR)/recovery-jaguar1.o: recovery.c $(ROOT)/include/postmerkos_uart_cryp
 
 $(BUILD_DIR)/recovery-luton26.elf: $(BUILD_DIR)/entry.o $(BUILD_DIR)/recovery-luton26.o linker.ld
 	$(LD) $(LDFLAGS) $(BUILD_DIR)/entry.o $(BUILD_DIR)/recovery-luton26.o -o $@
-	@$(READELF) -h $@ | grep -Eq "Entry point address:[[:space:]]+0x81000000$$"
+	@$(READELF) -h $@ | grep -Eq "Entry point address:[[:space:]]+0x86c00000$$"
 
 $(BUILD_DIR)/recovery-jaguar1.elf: $(BUILD_DIR)/entry.o $(BUILD_DIR)/recovery-jaguar1.o linker.ld
 	$(LD) $(LDFLAGS) $(BUILD_DIR)/entry.o $(BUILD_DIR)/recovery-jaguar1.o -o $@
-	@$(READELF) -h $@ | grep -Eq "Entry point address:[[:space:]]+0x81000000$$"
+	@$(READELF) -h $@ | grep -Eq "Entry point address:[[:space:]]+0x86c00000$$"
 
 $(ARTIFACT_DIR)/recovery-%.bin: $(BUILD_DIR)/recovery-%.elf | $(ARTIFACT_DIR)
 	$(OBJCOPY) -O binary $< $@

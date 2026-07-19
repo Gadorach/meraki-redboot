@@ -117,13 +117,15 @@ def validate_entry(readelf: str, elf: Path) -> None:
 
 def validate_uart_embedding(nm: str, elf: Path) -> None:
     data = elf.read_bytes()
-    if b"PMOSRAM READY 2" not in data:
+    if b"PMOSRAM STAGE1 COPY" not in data:
         return
     output = run(nm, "-n", str(elf))
     names = {line.split()[-1] for line in output.splitlines() if line.split()}
-    for required in ("uart_stage1_blob_start", "uart_stage1_blob_end"):
-        if required not in names:
-            raise ValueError(f"embedded UART stage1 is missing symbol {required}")
+    for forbidden in ("uart_stage1_blob_start", "uart_stage1_blob_end"):
+        if forbidden in names:
+            raise ValueError(f"relocatable loader still duplicates shared UART stage symbol {forbidden}")
+    if "loader_uart_stage1_copy_text" not in names:
+        raise ValueError("UART-enabled loader is missing the shared-stage copy shim")
     if "uart_ramloader_probe_and_run" in names:
         raise ValueError("ordinary UART C was linked into relocatable flash code")
 

@@ -17,8 +17,8 @@ for family in 1 2; do
   ld.lld -m elf32ltsmip -static -nostdlib \
     -T "$root/payloads/uart-firmware-recovery/linker.ld" \
     "$tmp/entry.o" "$tmp/recovery-$family.o" -o "$tmp/recovery-$family.elf"
-  readelf -h "$tmp/recovery-$family.elf" | grep -Eq 'Entry point address:[[:space:]]+0x81000000$'
-  readelf -s "$tmp/recovery-$family.elf" | grep -Eq '[[:space:]]81000000[[:space:]].*[[:space:]]_start$'
+  readelf -h "$tmp/recovery-$family.elf" | grep -Eq 'Entry point address:[[:space:]]+0x86c00000$'
+  readelf -s "$tmp/recovery-$family.elf" | grep -Eq '[[:space:]]86c00000[[:space:]].*[[:space:]]_start$'
   llvm-objcopy -O binary "$tmp/recovery-$family.elf" "$tmp/recovery-$family.bin"
   test "$(stat -c %s "$tmp/recovery-$family.bin")" -gt 0
   test "$(stat -c %s "$tmp/recovery-$family.bin")" -le 4194304

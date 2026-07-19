@@ -25,6 +25,8 @@ UART_MENU_TIMEOUT_MS ?= 5000
 UART_RAMLOADER_COUNT_HZ ?= 208000000
 UART_RAMLOADER_STAGE1_ADDR ?= 0xa7f00000
 UART_RAMLOADER_STAGE1_MAX_SIZE ?= 0x00100000
+UART_RAMLOADER_STAGE1_FLASH_OFFSET ?= 0x00020000
+UART_RAMLOADER_STAGE1_FLASH_MAX_SIZE ?= 0x00020000
 
 VALID_CRC_POLICIES := strict warn off
 VALID_SIZE_POLICIES := legacy-strict legacy-warn hard-only
@@ -68,6 +70,10 @@ RECOVERY_ARTIFACT_DIR := $(WORK_ROOT)/recovery/artifacts
 RECOVERY_STAMP := $(WORK_ROOT)/recovery/.built
 RECOVERY_LUTON26_BIN := $(RECOVERY_ARTIFACT_DIR)/recovery-luton26.bin
 RECOVERY_JAGUAR1_BIN := $(RECOVERY_ARTIFACT_DIR)/recovery-jaguar1.bin
+LIVEBOOT_BUILD_DIR := $(WORK_ROOT)/liveboot/build
+LIVEBOOT_ARTIFACT_DIR := $(WORK_ROOT)/liveboot/artifacts
+LIVEBOOT_STAMP := $(WORK_ROOT)/liveboot/.built
+LIVEBOOT_JAGUAR1_BIN := $(LIVEBOOT_ARTIFACT_DIR)/pmoslive-jaguar1.bin
 UART_STAGE1_DIR := $(BUILD_DIR)/uart-stage1
 UART_STAGE1_ENTRY_OBJ := $(UART_STAGE1_DIR)/entry.o
 UART_STAGE1_C_OBJ := $(UART_STAGE1_DIR)/uart_ramloader.o
@@ -82,7 +88,13 @@ LOADER_MAP := $(BUILD_DIR)/loader.map
 LOADER_SYM := $(BUILD_DIR)/loader.sym
 WRAPPER_ELF := $(BUILD_DIR)/boot-region.elf
 WRAPPER_OBJ := $(BUILD_DIR)/boot_wrapper.o
-WRAPPER_FIT_SHELL = fallback=$$((0x40000 - len)); active=$$((fallback - len)); test $$active -ge 4096 || { echo 'loader is too large for dual-slot 256 KiB boot region' >&2; exit 1; }
+WRAPPER_FIT_SHELL = \
+	(( stage_offset >= 4096 )) || { echo 'shared-stage boundary overlaps reset vectors' >&2; exit 1; }; \
+	(( stage_offset <= 0x40000 )) || { echo 'shared-stage boundary exceeds the 256 KiB boot region' >&2; exit 1; }; \
+	(( stage_size >= 0 )) || exit 1; \
+	(( stage_offset + stage_size <= 0x40000 )) || { echo 'shared UART stage exceeds the 256 KiB boot region' >&2; exit 1; }; \
+	fallback=$$((stage_offset - len)); active=$$((fallback - len)); \
+	test $$active -ge 4096 || { echo 'dual loader copies do not fit before the shared UART stage' >&2; exit 1; }
 
 CPP_CRC_strict := -DCONFIG_CRC_POLICY_STRICT=1
 CPP_CRC_warn := -DCONFIG_CRC_POLICY_WARN=1
@@ -162,15 +174,21 @@ HEAD_EXTRA_DEPS += $(UART_STAGE1_BIN)
 endif
 UART_STAGE1_RECOVERY_CPPFLAGS = \
 	-DRECOVERY_LUTON26_FILE=\"$(abspath $(RECOVERY_LUTON26_BIN))\" \
-	-DRECOVERY_JAGUAR1_FILE=\"$(abspath $(RECOVERY_JAGUAR1_BIN))\"
+	-DRECOVERY_JAGUAR1_FILE=\"$(abspath $(RECOVERY_JAGUAR1_BIN))\" \
+	-DLIVEBOOT_JAGUAR1_FILE=\"$(abspath $(LIVEBOOT_JAGUAR1_BIN))\"
 
 UART_STAGE1_CPPFLAGS = $(if $(UART_STAGE1_ENABLED),\
+	-DUART_STAGE1_SIZE=$(shell stat -c %s '$(UART_STAGE1_BIN)' 2>/dev/null || echo 0) \
+	-DUART_STAGE1_LOAD_ADDR=$(UART_RAMLOADER_STAGE1_ADDR) \
+	-DUART_STAGE1_FLASH_OFFSET=$(UART_RAMLOADER_STAGE1_FLASH_OFFSET),)
+
+WRAPPER_STAGE1_CPPFLAGS = $(if $(UART_STAGE1_ENABLED),\
 	-DUART_STAGE1_FILE=\"$(abspath $(UART_STAGE1_BIN))\" \
 	-DUART_STAGE1_SIZE=$(shell stat -c %s '$(UART_STAGE1_BIN)' 2>/dev/null || echo 0) \
-	-DUART_STAGE1_LOAD_ADDR=$(UART_RAMLOADER_STAGE1_ADDR),)
+	-DUART_STAGE1_OFFSET=$(UART_RAMLOADER_STAGE1_FLASH_OFFSET),)
 
 .PHONY: all __all-local __loader-local raw image validate inspect variants reference-check check-tools \
-	check-toolchain check-config clean distclean deps toolchain distrobox refresh-source test test-wrapper-fit payload recovery-payloads support-bundle work-layout help
+	check-toolchain check-config clean distclean deps toolchain distrobox refresh-source test test-wrapper-fit payload recovery-payloads liveboot-payloads support-bundle work-layout help
 
 # `make all` is the user-facing dispatcher. It prompts once on an interactive
 # terminal and then invokes the internal target either natively or in Distrobox.
@@ -188,12 +206,14 @@ all:
 	  "UART_RAMLOADER_COUNT_HZ=$(UART_RAMLOADER_COUNT_HZ)" \
 	  "UART_RAMLOADER_STAGE1_ADDR=$(UART_RAMLOADER_STAGE1_ADDR)" \
 	  "UART_RAMLOADER_STAGE1_MAX_SIZE=$(UART_RAMLOADER_STAGE1_MAX_SIZE)" \
+	  "UART_RAMLOADER_STAGE1_FLASH_OFFSET=$(UART_RAMLOADER_STAGE1_FLASH_OFFSET)" \
+	  "UART_RAMLOADER_STAGE1_FLASH_MAX_SIZE=$(UART_RAMLOADER_STAGE1_FLASH_MAX_SIZE)" \
 	  "SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)" "WORK_ROOT=$(WORK_ROOT)"
 
 __loader-local: check-tools check-toolchain check-config image validate
 
 # A successful default build produces the boot region and both RAM recovery tools.
-__all-local: __loader-local recovery-payloads
+__all-local: __loader-local recovery-payloads liveboot-payloads
 
 raw: check-tools check-toolchain check-config $(LOADER_BIN)
 
@@ -238,7 +258,9 @@ check-config:
 	  --uart-menu-timeout-ms '$(UART_MENU_TIMEOUT_MS)' \
 	  --uart-count-hz '$(UART_RAMLOADER_COUNT_HZ)' \
 	  --uart-stage1-addr '$(UART_RAMLOADER_STAGE1_ADDR)' \
-	  --uart-stage1-max-size '$(UART_RAMLOADER_STAGE1_MAX_SIZE)'
+	  --uart-stage1-max-size '$(UART_RAMLOADER_STAGE1_MAX_SIZE)' \
+	  --uart-stage1-flash-offset '$(UART_RAMLOADER_STAGE1_FLASH_OFFSET)' \
+	  --uart-stage1-flash-max-size '$(UART_RAMLOADER_STAGE1_FLASH_MAX_SIZE)'
 
 $(BUILD_DIR) $(OUT_DIR) $(ARTIFACT_DIR) $(LOG_DIR) $(SUPPORT_DIR) $(UART_STAGE1_DIR):
 	@mkdir -p $@
@@ -257,8 +279,8 @@ $(UART_STAGE1_C_OBJ): src/uart_ramloader.c include/postmerkos_uart_crypto.h | $(
 	@$(OBJDUMP) -drwC $@ > $@.dis
 	@$(READELF) -rW $@ > $@.relocs
 
-$(UART_STAGE1_RECOVERY_OBJ): src/uart_stage1_recovery_blobs.S $(RECOVERY_LUTON26_BIN) $(RECOVERY_JAGUAR1_BIN) | $(UART_STAGE1_DIR)
-	@echo "  AS      $@ (embedded Luton26/Jaguar1 recovery)"
+$(UART_STAGE1_RECOVERY_OBJ): src/uart_stage1_recovery_blobs.S $(RECOVERY_LUTON26_BIN) $(RECOVERY_JAGUAR1_BIN) $(LIVEBOOT_JAGUAR1_BIN) | $(UART_STAGE1_DIR)
+	@echo "  AS      $@ (embedded Luton26/Jaguar1 recovery + Jaguar1 PMOSLIVE)"
 	@SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(STAGE1_ASFLAGS) $(UART_STAGE1_RECOVERY_CPPFLAGS) -c $< -o $@
 	@$(OBJDUMP) -drwC $@ > $@.dis
 	@$(READELF) -rW $@ > $@.relocs
@@ -329,13 +351,16 @@ $(LOADER_BIN): $(LOADER_ELF)
 	@test $$(stat -c %s $@) -gt 0
 	@test $$(( $$(stat -c %s $@) % 4 )) -eq 0
 
-$(WRAPPER_OBJ): src/boot_wrapper.S $(LOADER_BIN) | $(BUILD_DIR)
+$(WRAPPER_OBJ): src/boot_wrapper.S $(LOADER_BIN) $(HEAD_EXTRA_DEPS) | $(BUILD_DIR)
 	@echo "  AS      $@"
 	@len=$$(stat -c %s $(LOADER_BIN)); \
+	 stage_offset=$$(( $(if $(UART_STAGE1_ENABLED),$(UART_RAMLOADER_STAGE1_FLASH_OFFSET),0x40000) )); \
+	 stage_size=$$(( $(if $(UART_STAGE1_ENABLED),$$(stat -c %s $(UART_STAGE1_BIN)),0) )); \
+	 test $$stage_size -le $$(( $(UART_RAMLOADER_STAGE1_FLASH_MAX_SIZE) )) || { echo 'shared UART stage exceeds its flash reservation' >&2; exit 1; }; \
 	 $(WRAPPER_FIT_SHELL); \
 	 SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) $(CC) $(ASFLAGS) \
 	   -DACTIVE_OFFSET=$$active -DFALLBACK_OFFSET=$$fallback -DLOADER_LENGTH=$$len \
-	   -DLOADER_FILE=\"$(abspath $(LOADER_BIN))\" -c $< -o $@
+	   -DLOADER_FILE=\"$(abspath $(LOADER_BIN))\" $(WRAPPER_STAGE1_CPPFLAGS) -c $< -o $@
 
 $(WRAPPER_ELF): $(WRAPPER_OBJ) src/wrapper.lds
 	@echo "  LD      $@"
@@ -393,7 +418,8 @@ $(ARTIFACT).manifest.json: $(ARTIFACT) $(LOADER_BIN)
 	  --uart-interbyte-timeout-ms '$(UART_RAMLOADER_INTERBYTE_TIMEOUT_MS)' \
 	  --uart-menu-timeout-ms '$(UART_MENU_TIMEOUT_MS)' \
 	  --uart-stage1-addr '$(UART_RAMLOADER_STAGE1_ADDR)' \
-	  $(if $(UART_STAGE1_ENABLED),--uart-stage1-elf '$(UART_STAGE1_ELF)' --uart-stage1-bin '$(UART_STAGE1_BIN)' --recovery-luton26-bin '$(RECOVERY_LUTON26_BIN)' --recovery-jaguar1-bin '$(RECOVERY_JAGUAR1_BIN)',) \
+	  --uart-stage1-flash-offset '$(UART_RAMLOADER_STAGE1_FLASH_OFFSET)' \
+	  $(if $(UART_STAGE1_ENABLED),--uart-stage1-elf '$(UART_STAGE1_ELF)' --uart-stage1-bin '$(UART_STAGE1_BIN)' --recovery-luton26-bin '$(RECOVERY_LUTON26_BIN)' --recovery-jaguar1-bin '$(RECOVERY_JAGUAR1_BIN)' --liveboot-jaguar1-bin '$(LIVEBOOT_JAGUAR1_BIN)',) \
 	  --compiler '$(CC)' --linker '$(LD)' \
 	  --toolchain-id "$$(./scripts/toolchain-env.sh --print-id)" \
 	  --loader $(LOADER_BIN) --image $(ARTIFACT) --output $@
@@ -404,7 +430,8 @@ $(ARTIFACT).manifest.json.sha256: $(ARTIFACT).manifest.json
 validate: check-config $(ARTIFACT) $(LOADER_BIN) $(LOADER_SYM)
 	@python3 scripts/validate_image.py \
 	  --variant '$(VARIANT)' --crc-policy '$(CRC_POLICY)' --size-policy '$(SIZE_POLICY)' \
-	  --loader $(LOADER_BIN) --image $(ARTIFACT) --symbols $(LOADER_SYM)
+	  --loader $(LOADER_BIN) --image $(ARTIFACT) --symbols $(LOADER_SYM) \
+	  $(if $(UART_STAGE1_ENABLED),--shared-stage $(UART_STAGE1_BIN) --shared-stage-offset $(UART_RAMLOADER_STAGE1_FLASH_OFFSET),)
 
 inspect: $(ARTIFACT) $(LOADER_BIN) $(LOADER_SYM)
 	@python3 scripts/inspect_image.py --loader $(LOADER_BIN) --image $(ARTIFACT) --symbols $(LOADER_SYM)
@@ -441,6 +468,23 @@ $(RECOVERY_LUTON26_BIN) $(RECOVERY_JAGUAR1_BIN): $(RECOVERY_STAMP)
 
 recovery-payloads: $(RECOVERY_STAMP)
 
+$(LIVEBOOT_STAMP): payloads/uart-liveboot/liveboot.c \
+                    payloads/uart-liveboot/entry.S \
+                    payloads/uart-liveboot/Makefile \
+                    payloads/uart-liveboot/linker.ld \
+                    payloads/uart-liveboot/write_descriptor.py \
+                    payloads/uart-firmware-recovery/recovery.c \
+                    include/postmerkos_uart_crypto.h | check-tools check-toolchain
+	@$(MAKE) -C payloads/uart-liveboot CROSS_COMPILE='$(CROSS_COMPILE)' \
+	  BUILD_DIR='$(LIVEBOOT_BUILD_DIR)' ARTIFACT_DIR='$(LIVEBOOT_ARTIFACT_DIR)' all
+	@mkdir -p '$(dir $(LIVEBOOT_STAMP))'
+	@touch '$(LIVEBOOT_STAMP)'
+
+$(LIVEBOOT_JAGUAR1_BIN): $(LIVEBOOT_STAMP)
+	@test -s '$@'
+
+liveboot-payloads: $(LIVEBOOT_STAMP)
+
 work-layout:
 	@echo "Work root:      $(WORK_ROOT)"
 	@echo "Toolchain:     $(TOOLCHAIN_ROOT)"
@@ -449,6 +493,7 @@ work-layout:
 	@echo "Artifacts:     $(ARTIFACT_DIR)"
 	@echo "UART stage1:   $(UART_STAGE1_DIR)"
 	@echo "Recovery:      $(WORK_ROOT)/recovery"
+	@echo "PMOSLIVE:      $(WORK_ROOT)/liveboot"
 	@echo "Logs:          $(LOG_DIR)"
 
 support-bundle: | $(SUPPORT_DIR)
@@ -487,12 +532,15 @@ distrobox:
 	  "SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH)" "WORK_ROOT=$(WORK_ROOT)"
 
 test-wrapper-fit:
-	@len=21080; $(WRAPPER_FIT_SHELL); test $$active -eq $$((0x40000 - 2 * len))
+	@len=21080; stage_offset=$$(( $(UART_RAMLOADER_STAGE1_FLASH_OFFSET) )); stage_size=117832; \
+	 $(WRAPPER_FIT_SHELL); test $$active -eq $$((stage_offset - 2 * len)); \
+	 test $$fallback -eq $$((stage_offset - len))
 
 test:
 	@python3 -m unittest discover -s tests -p 'test_*.py' -v
 	@./scripts/structural-test-clang.sh
 	@./scripts/structural-test-recovery-clang.sh
+	@./scripts/structural-test-liveboot-clang.sh
 
 clean:
 	@rm -rf '$(WORK_ROOT)/build' '$(WORK_ROOT)/out' '$(WORK_ROOT)/artifacts' '$(WORK_ROOT)/recovery' '$(WORK_ROOT)/logs' '$(WORK_ROOT)/support'

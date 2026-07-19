@@ -20,6 +20,21 @@
 #error LOADER_FILE must be supplied by the build
 #endif
 
+#if defined(UART_STAGE1_FILE)
+#ifndef UART_STAGE1_OFFSET
+#error UART_STAGE1_OFFSET must be supplied with UART_STAGE1_FILE
+#endif
+#ifndef UART_STAGE1_SIZE
+#error UART_STAGE1_SIZE must be supplied with UART_STAGE1_FILE
+#endif
+#if UART_STAGE1_OFFSET < 0x1000 || UART_STAGE1_OFFSET >= 0x40000
+#error UART_STAGE1_OFFSET must be inside the boot region and outside vectors
+#endif
+#if UART_STAGE1_SIZE <= 0 || (UART_STAGE1_OFFSET + UART_STAGE1_SIZE) > 0x40000
+#error Shared UART stage does not fit in the boot region
+#endif
+#endif
+
 #define HI16(x) (((x) >> 16) & 0xffff)
 #define LO16(x) ((x) & 0xffff)
 
@@ -107,5 +122,14 @@ active_loader:
     .org FALLBACK_OFFSET, 0xff
 fallback_loader:
     .incbin LOADER_FILE
+
+#if defined(UART_STAGE1_FILE)
+    .org UART_STAGE1_OFFSET, 0xff
+    .global shared_uart_stage1_blob
+shared_uart_stage1_blob:
+    .incbin UART_STAGE1_FILE
+    .global shared_uart_stage1_blob_end
+shared_uart_stage1_blob_end:
+#endif
 
     .org 0x40000, 0xff
