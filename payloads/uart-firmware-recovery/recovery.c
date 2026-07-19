@@ -214,6 +214,7 @@ struct spi_device {
     u8 clear_flag_opcode;
 };
 
+#ifndef PMOSLIVE_TRANSPORT_ONLY
 static const char recovery_descriptor[] = RECOVERY_DESCRIPTOR;
 static const struct spi_device supported_devices[] = {
     {0xc2u, 0x20u, 0x18u, 0xd8u, FULL_IMAGE_SIZE, 0x10000u, 256u, 8000u, 100u, 0u, 0u, 0u},
@@ -222,11 +223,12 @@ static const struct spi_device supported_devices[] = {
     {0x20u, 0xbau, 0x18u, 0xd8u, FULL_IMAGE_SIZE, 0x10000u, 256u, 8000u, 100u, 0x70u, 0x3au, 0x50u},
     {0xc8u, 0x40u, 0x18u, 0xd8u, FULL_IMAGE_SIZE, 0x10000u, 256u, 8000u, 100u, 0u, 0u, 0u}
 };
-
-static volatile u32 * const uart = (volatile u32 *)UART_BASE;
 static volatile u32 * const spi_sw = (volatile u32 *)SPI_SW_MODE_ADDR;
 static volatile u32 * const spi_general_ctrl = (volatile u32 *)SPI_GENERAL_CTRL_ADDR;
 static u8 preflight_page[256];
+#endif
+
+static volatile u32 * const uart = (volatile u32 *)UART_BASE;
 static u32 uart_error_flags;
 static u32 uart_pushback_valid;
 static u8 uart_pushback_byte;
@@ -537,6 +539,7 @@ static void digest_to_hex(const u8 digest[32], u8 output[64])
     }
 }
 
+#ifndef PMOSLIVE_TRANSPORT_ONLY
 static int validate_manifest_and_image(const struct package_header *header)
 {
     char family[16];
@@ -1198,6 +1201,8 @@ static int spi_verify_full(const struct spi_device *device)
     return 0;
 }
 
+#endif /* !PMOSLIVE_TRANSPORT_ONLY */
+
 static u8 v3_wire_buffer[MAX_WIRE_CHUNK];
 static u8 v3_decode_buffer[MAX_CHUNK];
 static u8 v3_received_map[FULL_IMAGE_SIZE / 1024u / 8u];
@@ -1827,6 +1832,7 @@ static int validate_v3_package_header(const struct package_v3_header *header, co
     return 1;
 }
 
+#ifndef PMOSLIVE_TRANSPORT_ONLY
 static void make_legacy_header(struct package_header *legacy,
                                const struct package_v3_header *header)
 {
@@ -2060,3 +2066,4 @@ void recovery_main(void)
         puts_b("PMOSREC RESULT ERROR UNKNOWN-COMMAND\n");
     }
 }
+#endif /* !PMOSLIVE_TRANSPORT_ONLY */

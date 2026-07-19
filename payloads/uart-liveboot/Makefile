@@ -39,8 +39,8 @@ $(ARTIFACT_DIR)/pmoslive-jaguar1.bin: $(BUILD_DIR)/pmoslive-jaguar1.elf | $(ARTI
 	$(OBJCOPY) -O binary $< $@
 	@test $$(stat -c %s $@) -gt 0
 	@test $$(stat -c %s $@) -le 4194304
-	@! grep -a -q 'ERASEFLASH\|FLASH-PREFLIGHT\|PROGRESS ERASE\|PROGRESS PROGRAM' $@
-	@grep -a -q 'PMOSLIVE3;SOC=jaguar1' $@
+	@$(PYTHON) write_descriptor.py --binary $@ \
+		--output $(BUILD_DIR)/pmoslive-jaguar1.validation.json
 
 $(ARTIFACT_DIR)/%.bin.sha256: $(ARTIFACT_DIR)/%.bin
 	@cd $(ARTIFACT_DIR) && $(SHA256SUM) $*.bin > $*.bin.sha256

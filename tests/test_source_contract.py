@@ -327,6 +327,27 @@ class SourceContractTests(unittest.TestCase):
 
         self.assertIn("physical 112-120 MiB", readme)
         self.assertIn("physical 120-128 MiB", readme)
+        self.assertIn("#define PMOSLIVE_TRANSPORT_ONLY 1", source)
+        recovery = (ROOT / "payloads/uart-firmware-recovery/recovery.c").read_text()
+        self.assertGreaterEqual(recovery.count("#ifndef PMOSLIVE_TRANSPORT_ONLY"), 3)
+        self.assertIn("#endif /* !PMOSLIVE_TRANSPORT_ONLY */", recovery)
+        self.assertIn("transport-only preprocessor", readme)
+
+        preprocessed = subprocess.run(
+            [
+                "cc", "-E", "-P", "-DRECOVERY_SOC_FAMILY=2",
+                "-I", str(ROOT / "include"),
+                str(ROOT / "payloads/uart-liveboot/liveboot.c"),
+            ],
+            check=False, capture_output=True, text=True,
+        )
+        self.assertEqual(preprocessed.returncode, 0, preprocessed.stderr)
+        self.assertIn("PMOSLIVE3;SOC=jaguar1", preprocessed.stdout)
+        for marker in (
+            "ERASEFLASH", "FLASH-PREFLIGHT", "PROGRESS ERASE",
+            "PROGRESS PROGRAM", "PMOSPFT",
+        ):
+            self.assertNotIn(marker, preprocessed.stdout)
 
 
 if __name__ == "__main__":

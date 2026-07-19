@@ -2,13 +2,16 @@
  * postmerkOS PMOSLIVE pre-kernel UART live boot payload.
  *
  * This intentionally compiles the proven PMOSREC v3 transport implementation
- * into the same translation unit, then links with section garbage collection.
- * No SPI controller, erase, program, or flash verification routine is reachable
- * from liveboot_main and therefore none is retained in the PMOSLIVE binary.
+ * into the same translation unit. PMOSLIVE_TRANSPORT_ONLY excludes all SPI,
+ * erase, program, preflight, confirmation, and flash-main code before the
+ * compiler can pool its string literals; section garbage collection is a
+ * secondary safeguard.
  */
+#define PMOSLIVE_TRANSPORT_ONLY 1
 #define recovery_main pmosrec_flash_main_unreachable
 #include "../uart-firmware-recovery/recovery.c"
 #undef recovery_main
+#undef PMOSLIVE_TRANSPORT_ONLY
 
 /* Clang and GCC may lower fixed-size initialisers or zeroing loops to
  * memcpy/memset even in a freestanding build. Keep both routines local so the

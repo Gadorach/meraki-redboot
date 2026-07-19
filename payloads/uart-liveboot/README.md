@@ -18,6 +18,7 @@ The legacy MIPS boot-parameter workspace is compacted into physical
 exception vectors and avoids the decompressed kernel beginning at physical
 `0x00001000`.
 
-The PMOSLIVE binary is linked at `0x86c00000`. Link-time garbage collection and
-post-link marker checks ensure SPI erase/program paths from the included
-PMOSREC source are not retained.
+The PMOSLIVE binary is linked at `0x86c00000`. A transport-only preprocessor
+mode excludes PMOSREC's SPI, erase, program, preflight, confirmation, and flash
+main-loop code before compilation. Link-time garbage collection and post-link
+marker checks provide an additional verification layer.
