@@ -54,6 +54,7 @@ def main() -> int:
             "top_reserved_mib": 8,
         },
         "linux_handoff": "mips-legacy-argc-argv-envp-external-initrd-v1",
+        "platform_identity_handoff": "kernel-command-line-postmerkos-model-v1",
         "rootfs_handoff": "squashfs-as-legacy-initrd-v1",
         "binary": {
             "filename": args.binary.name,

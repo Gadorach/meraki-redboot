@@ -402,6 +402,7 @@ static int live_add_env(u32 *envp, u32 *index, char **string_cursor,
 }
 
 static int prepare_linux_boot_params(const struct live_boot_plan *plan,
+                                     const char *target_model,
                                      u32 *argc_out, u32 *argv_address,
                                      u32 *envp_address)
 {
@@ -440,6 +441,12 @@ static int prepare_linux_boot_params(const struct live_boot_plan *plan,
     LIVE_ADD_ARG("prompt_ramdisk=0");
     LIVE_ADD_ARG("ramdisk_size=8192");
     LIVE_ADD_ARG("postmerkos.live=1");
+    if (text_equal(target_model, "MS42P"))
+        LIVE_ADD_ARG("postmerkos.model=MS42P");
+    else if (text_equal(target_model, "MS42"))
+        LIVE_ADD_ARG("postmerkos.model=MS42");
+    else
+        goto overflow;
     LIVE_ADD_ARG("panic=5");
     argv[argc] = 0u;
 
@@ -483,10 +490,11 @@ static int read_boot_confirmation(u32 nonce)
 }
 
 static void launch_live_linux(const struct live_boot_plan *plan,
+                              const char *target_model,
                               u32 baseline_divisor)
 {
     u32 argv_address, envp_address, argc, i;
-    if (prepare_linux_boot_params(plan, &argc, &argv_address, &envp_address) != 0) {
+    if (prepare_linux_boot_params(plan, target_model, &argc, &argv_address, &envp_address) != 0) {
         puts_b("PMOSLIVE HALT BOOT-PARAMS\n");
         for (;;) __asm__ __volatile__("wait");
     }
@@ -494,6 +502,7 @@ static void launch_live_linux(const struct live_boot_plan *plan,
     puts_b(" ARGC="); put_u32_dec(argc); puts_b(" ARGV="); hex32(argv_address);
     puts_b(" ENVP="); hex32(envp_address); puts_b(" ROOTFS=");
     hex32(LIVE_ROOTFS_DEST); puts_b(" ROOTFS_BYTES="); hex32(plan->rootfs_size);
+    puts_b(" MODEL="); puts_b(target_model);
     puts_b(" MEM_MIB=120 BOOTPARAM_PHYS="); hex32(LIVE_BOOT_PARAMS_PHYS_BASE);
     puts_b(" BOOTPARAM_BYTES="); hex32(LIVE_BOOT_PARAMS_BYTES); puts_b("\n");
     puts_b("PMOSLIVE UART-RESTORE RATE=115200 DIV="); put_u32_dec(baseline_divisor);
@@ -568,7 +577,7 @@ static int run_live_package_v3(u32 baseline_divisor)
         hex32(nonce); puts_b(" RETRY=FOREVER POWER-CYCLE-TO-CANCEL\n");
     }
     puts_b("PMOSLIVE CONFIRMATION-ACK\n");
-    launch_live_linux(&plan, baseline_divisor);
+    launch_live_linux(&plan, header.target_model, baseline_divisor);
     return 0;
 }
 

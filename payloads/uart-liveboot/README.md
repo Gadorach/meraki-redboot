@@ -22,3 +22,12 @@ The PMOSLIVE binary is linked at `0x86c00000`. A transport-only preprocessor
 mode excludes PMOSREC's SPI, erase, program, preflight, confirmation, and flash
 main-loop code before compilation. Link-time garbage collection and post-link
 marker checks provide an additional verification layer.
+
+## Runtime platform identity
+
+PMOSLIVE passes the exact package target model using the normal Linux command
+line as `postmerkos.model=MS42` or `postmerkos.model=MS42P`.  This remains part
+of the standard MIPS argc/argv handoff; it is not a private register ABI.  The
+retail userspace may use the value only while `postmerkos.live=1` is active and
+only after validating it against the exact board profile table.  Physical
+EEPROM identity remains preferred when it is readable.

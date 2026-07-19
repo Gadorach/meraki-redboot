@@ -171,6 +171,7 @@ def main() -> int:
                     "accepted_models": ["MS42", "MS42P"],
                     "transport_contract": "pmosrec-v3-adaptive-uart-sparse-lz4-v1",
                     "linux_handoff": "mips-legacy-argc-argv-envp-external-initrd-v1",
+                    "platform_identity_handoff": "kernel-command-line-postmerkos-model-v1",
                     "rootfs_handoff": "squashfs-as-legacy-initrd-v1",
                     "kernel_load_address": 0x81000000,
                     "squashfs_address": 0x87000000,
